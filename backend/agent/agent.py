@@ -1,8 +1,11 @@
 from google.adk.agents import LlmAgent
-from google.adk.tools import google_search
 from .tools import get_nearby_pois, analyze_frame, get_distance, build_maps_url
+from .tools.search import search_web
 from .prompts import SYSTEM_PROMPT
 
+# Note: google_search built-in tool cannot be combined with custom function calling
+# in the same Gemini request. Instead, search_web makes its own grounded Gemini call
+# internally — same result, no conflict.
 root_agent = LlmAgent(
     model="gemini-2.5-flash",
     name="waypoint_agent",
@@ -13,6 +16,6 @@ root_agent = LlmAgent(
         analyze_frame,
         get_distance,
         build_maps_url,
-        google_search,
+        search_web,
     ],
 )

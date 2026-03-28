@@ -14,7 +14,9 @@ from google.genai import types
 
 from agent.agent import root_agent
 from agent.prompts import DISCOVER_PROMPT_TEMPLATE
-from config import GPS_REQUIRED
+from agent.tools.poi import get_nearby_pois
+from agent.tools.maps import get_distance, build_maps_url
+from config import GPS_REQUIRED, POI_CHIPS_MAX
 from voice import handle_voice
 
 app = FastAPI(title="WAYPOINT API")
@@ -112,20 +114,54 @@ async def analyze(websocket: WebSocket):
                     continue
 
                 lat, lng = gps["lat"], gps["lng"]
-                prompt = DISCOVER_PROMPT_TEMPLATE.format(lat=lat, lng=lng)
-                content = types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=prompt)],
-                )
 
-                final_text = await _run_agent(runner, session_id, content)
-                if final_text:
-                    chips = extract_poi_chips(final_text)
-                    spoken = clean_response_text(final_text)
-                    if spoken:
-                        await websocket.send_json({"type": "narration", "text": spoken})
+                # Call tools directly — reliable, no JSON parsing of agent output
+                poi_result = await asyncio.to_thread(get_nearby_pois, lat, lng)
+                pois = poi_result.get("pois", [])
+
+                if pois:
+                    # Enrich top POI_CHIPS_MAX places with walk time + maps URL
+                    chips = []
+                    for poi in pois[:POI_CHIPS_MAX]:
+                        if poi.get("lat") and poi.get("lng"):
+                            dist = await asyncio.to_thread(
+                                get_distance, lat, lng, poi["lat"], poi["lng"]
+                            )
+                            url = build_maps_url(poi["name"], poi["lat"], poi["lng"])
+                            chips.append({
+                                **poi,
+                                "walk_min": round(dist.get("duration_min", 0)),
+                                "maps_url": url.get("maps_url", ""),
+                            })
+
                     if chips:
                         await websocket.send_json({"type": "poi_chips", "pois": chips})
+
+                    # Ask agent for a short spoken intro about what's nearby
+                    names = ", ".join(c["name"] for c in chips[:3])
+                    intro_prompt = (
+                        f"I found these nearby places for a tourist at lat={lat}, lng={lng}: {names}. "
+                        f"Give a 1-2 sentence friendly spoken intro about what's nearby — "
+                        f"don't list all the places, just give a warm overview."
+                    )
+                    spoken = await _run_agent(runner, session_id, types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=intro_prompt)],
+                    ))
+                    if spoken:
+                        await websocket.send_json({"type": "narration", "text": clean_response_text(spoken)})
+                else:
+                    # No POIs found — ask agent to greet the tourist
+                    fallback_prompt = (
+                        f"A tourist just arrived in Brooklyn at lat={lat}, lng={lng}. "
+                        f"Welcome them and ask what they'd like to explore."
+                    )
+                    spoken = await _run_agent(runner, session_id, types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=fallback_prompt)],
+                    ))
+                    if spoken:
+                        await websocket.send_json({"type": "narration", "text": clean_response_text(spoken)})
 
             # ── Text chat (tourist typed or speech-to-text) ───
             elif msg_type == "chat":

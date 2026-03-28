@@ -12,6 +12,7 @@ from config import GOOGLE_API_KEY
 from agent.tools.poi import get_nearby_pois
 from agent.tools.vision import analyze_frame
 from agent.tools.maps import get_distance, build_maps_url
+from agent.tools.search import search_web
 
 VOICE_SYSTEM_PROMPT = """You are WAYPOINT, a friendly local guide helping first-time tourists explore Brooklyn, NYC.
 You are having a real-time voice conversation. The tourist is walking around Brooklyn right now.
@@ -19,8 +20,13 @@ You are having a real-time voice conversation. The tourist is walking around Bro
 RULES:
 1. Be warm, conversational, and enthusiastic. Sound like a friend who knows Brooklyn well.
 2. Keep responses SHORT — 1-3 sentences max. This is spoken audio, not text.
-3. You have tools to find nearby places, identify what the camera sees, and get walking directions.
-   Use them when the tourist asks something specific. Don't call tools on every turn.
+3. You have tools to find nearby places, identify what the camera sees, get walking directions,
+   and search the web. Use tools when the tourist asks something specific.
+   - Nearby places / what to see → get_nearby_pois
+   - What is this building? → analyze_frame
+   - How far is it? → get_distance
+   - Take me there → build_maps_url
+   - Hours, prices, reviews, current events → search_web
 4. When you mention specific places, give a one-sentence reason why they're worth visiting.
 5. Never say "As an AI" — just talk naturally.
 6. When the tourist seems done with a topic, ask a follow-up question to keep exploring.
@@ -38,6 +44,7 @@ TOOL_FUNCTIONS = {
     "analyze_frame": analyze_frame,
     "get_distance": get_distance,
     "build_maps_url": build_maps_url,
+    "search_web": search_web,
 }
 
 # Tool declarations for Gemini Live API
@@ -98,6 +105,23 @@ TOOL_DECLARATIONS = [
                     "dest_lng": types.Schema(type="NUMBER", description="Destination longitude"),
                 },
                 required=["dest_name", "dest_lat", "dest_lng"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="search_web",
+            description=(
+                "Search the internet for current information about a place: "
+                "opening hours, admission prices, recent reviews, events, or any fact you need to look up."
+            ),
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "query": types.Schema(
+                        type="STRING",
+                        description='Search query, e.g. "Jane\'s Carousel Brooklyn hours admission price"',
+                    ),
+                },
+                required=["query"],
             ),
         ),
     ])
