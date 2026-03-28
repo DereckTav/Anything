@@ -1,5 +1,5 @@
 import {
-  startCamera, stopCamera, captureFrame, getGPS,
+  startCamera, stopCamera, captureFrame, getGPS, seedGPS,
   connectWebSocket, disconnectWebSocket, sendMessage, isConnected,
 } from './camera.js';
 import { speakNarration, stopSpeaking, toggleMute, isMuted } from './audio.js';
@@ -599,12 +599,13 @@ async function requestPermissions() {
   }
 
   try {
-    await new Promise((resolve, reject) => {
+    const position = await new Promise((resolve, reject) => {
       navigator.geolocation.getCurrentPosition(resolve, reject, {
         enableHighAccuracy: true,
         timeout: 10000,
       });
     });
+    seedGPS(position);
     hideGPSOverlay();
     transitionTo(State.ANALYZING);
   } catch {

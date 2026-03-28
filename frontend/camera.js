@@ -109,6 +109,14 @@ export function getGPS() {
   return gpsPosition;
 }
 
+export function seedGPS(position) {
+  gpsPosition = {
+    lat: position.coords.latitude,
+    lng: position.coords.longitude,
+    accuracy: position.coords.accuracy,
+  };
+}
+
 // ═══════════════════════════════════════════
 // WebSocket (with auto-reconnect + queue)
 // ═══════════════════════════════════════════
