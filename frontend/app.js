@@ -69,7 +69,6 @@ function handleWSMessage(data) {
   switch (data.type) {
     case 'narration':
       if (currentState === State.ANALYZING) {
-        showSubtitle(data.text);
         speakNarration(data.text);
         if (data.ar_labels?.length) renderARLabels(data.ar_labels);
       }
