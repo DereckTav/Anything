@@ -64,7 +64,10 @@ function handleWSMessage(data) {
     case 'poi_chips':
       if (data.pois?.length) {
         currentPOIs = data.pois;
-        if (currentState === State.EXPLORING) renderPOIChips(data.pois);
+        if (currentState === State.EXPLORING) {
+          renderPOIChips(data.pois);
+          renderLandmarkHighlights(data.pois);
+        }
       }
       break;
 
@@ -110,6 +113,30 @@ function renderPOIChips(pois) {
 function clearPOIChips() {
   const container = document.getElementById('poi-chips-container');
   if (container) container.innerHTML = '';
+}
+
+// ── Landmark AR highlights ─────────────────────────────────────
+
+const HIGHLIGHT_POSITIONS = ['top-left', 'top-right', 'mid-left', 'mid-right'];
+
+function renderLandmarkHighlights(pois) {
+  const labels = pois.slice(0, 4).map((poi, i) => ({
+    text: poi.name,
+    source: poi.type || 'landmark',
+    position: HIGHLIGHT_POSITIONS[i % HIGHLIGHT_POSITIONS.length],
+    poi,
+  }));
+  renderARLabels(labels, (label) => askAboutLandmark(label.poi));
+}
+
+function askAboutLandmark(poi) {
+  const gps = getGPS();
+  showSubtitle(`Looking up ${poi.name}...`);
+  sendMessage({
+    type: 'chat',
+    text: `What's interesting about ${poi.name}? Give me 1-2 sentences like a knowledgeable local guide.`,
+    gps,
+  });
 }
 
 // ── Proactive discovery loop ───────────────────────────────────

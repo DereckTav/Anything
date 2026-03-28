@@ -132,6 +132,15 @@
       animation: bar-fill 800ms ease-out forwards;
     }
 
+    /* ── Landmark tap indicator ── */
+    @keyframes landmark-ping {
+      0%, 100% { opacity: 0.6; transform: scale(1); }
+      50%      { opacity: 1; transform: scale(1.4); }
+    }
+    .landmark-ping {
+      animation: landmark-ping 2s ease-in-out infinite;
+    }
+
     /* ── Horizontal scroll: hide scrollbar ── */
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
