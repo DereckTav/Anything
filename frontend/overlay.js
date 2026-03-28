@@ -56,7 +56,6 @@ export function renderARLabels(labels, onLabelClick = null) {
           <span class="font-label text-[10px] text-[#f1dfbe] uppercase whitespace-nowrap">[${escapeHTML(label.source)}]</span>
           <span class="font-body text-sm text-white leading-tight">${escapeHTML(label.text)}</span>
         </div>
-        <div class="ar-line mt-0.5"></div>
       `;
 
       if (onLabelClick) {
