@@ -14,7 +14,7 @@
 ## Core Flows
 
 ```
-[Camera Feed] → [Gemini Live Vision] → [ADK Agent Tools: PLUTO/311/VisionZero/Trees]
+[Camera JPEG frame + GPS] → [Gemini 2.5 Pro] ← [ADK Tools: PLUTO/311/VisionZero/Trees/AQI]
                       ↓
           [Spoken Narration + AR Labels + Subtitles]
                       ↓
@@ -22,6 +22,35 @@
                       ↓
             [End] → [Synthesis Report]
 ```
+
+### How CITYSCOPE Uses Both Inputs
+
+Every 2 seconds, a single Gemini call receives **two simultaneous inputs**:
+
+| Input | Source | What it contains |
+|-------|--------|-----------------|
+| **Video frame** | Camera JPEG (640px, 60% quality) sent as image | Visual: buildings, signage, street conditions, scale, materials |
+| **Tool results** | NYC Open Data APIs via ADK tools | Facts: zoning district, FAR, 311 complaints, crash data, tree count, AQI |
+
+Gemini **synthesizes both** — cross-referencing what it sees with what the data says:
+- Spots scaffolding visually → 311 confirms active construction complaints → narrates the connection
+- Identifies a low-rise building → PLUTO shows 40% unused FAR → tells the client there's development upside
+- Sees a wide intersection → Vision Zero shows 3 crashes in 12 months → flags the safety concern
+
+This grounds every statement: no claim is made without either a visible fact or a real data point behind it.
+
+### Model Approach: Snapshot with `gemini-2.5-pro` (Approach A)
+
+| | Approach A — Snapshot ✓ | Approach B — Live Stream |
+|-|------------------------|--------------------------|
+| **Model** | `gemini-2.5-pro` | `gemini-2.0-flash-live-001` |
+| **Video** | JPEG frame every 2s as image input | Continuous WebSocket video stream |
+| **Pros** | Best reasoning, most reliable tool calls, simpler protocol | True real-time, built-in audio I/O |
+| **Cons** | Not true streaming | Less capable, more complex API |
+
+**We use Approach A.** The 2-second cadence feels live on mobile. Superior reasoning quality from 2.5-pro outweighs the streaming benefit, and tool calling is far more reliable. The WebSocket protocol is also simpler: send frame → get JSON response.
+
+---
 
 ### Three App States
 1. **Active Analysis** — Full-screen live `<video>`, gradient overlay, top bar with live GPS coords, canvas AR label chips anchored to buildings (`[PLUTO]`, `[311]`, `[PARKS]` prefixed), cinematic italic subtitles at bottom, floating bottom nav pill (Voice/Cam/Inspect/Stop), desktop-only side HUD ("AI ACTIVE STREAM")
@@ -69,7 +98,8 @@
 | Real-time comms | WebSocket | Low-latency bidirectional streaming |
 | Backend | Python FastAPI on Cloud Run | Handles WebSocket + ADK |
 | Agent | Google ADK `LlmAgent` | Orchestrates tools, manages session |
-| Vision + Voice | Gemini 2.5 Pro (`gemini-2.5-pro`) | Most capable model; multimodal analysis + tool use. **Note:** If Live API (real-time audio streaming) requires `gemini-2.0-flash-live-001` at build time, use a two-model setup: 2.5-pro for analysis/tools, 2.0-flash-live for the audio stream. |
+| Vision + Analysis | Gemini 2.5 Pro (`gemini-2.5-pro`) | Snapshot approach: JPEG frame + tool results sent as multimodal input every 2s. Best reasoning + most reliable tool calling. |
+| Audio output | Web Speech API (`speechSynthesis`) | Browser TTS plays narration text. No separate audio model needed. |
 | Data APIs | NYC Open Data (Socrata) + AirNow API | PLUTO, 311, Vision Zero, Tree Census, AQI |
 | PDF Export | `reportlab` or `weasyprint` | Server-side PDF generation |
 | Hosting | Google Cloud Run | Mandatory, handles WebSocket |
