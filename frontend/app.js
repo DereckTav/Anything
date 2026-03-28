@@ -2,7 +2,7 @@ import {
   startCamera, stopCamera, captureFrame, getGPS, seedGPS,
   connectWebSocket, disconnectWebSocket, sendMessage, isConnected,
 } from './camera.js';
-import { speakNarration, stopSpeaking, toggleMute, isMuted } from './audio.js';
+import { speakNarration, stopSpeaking, toggleMute, isMuted, startListening, stopListening, unlockAudio } from './audio.js';
 import { renderARLabels, clearARLabels, showSubtitle, hideSubtitle } from './overlay.js';
 
 // ── State machine ──
@@ -138,10 +138,15 @@ function hideInspectorLoading() {
 
 // ── Frame capture loop ──
 
+let framesPaused = false;  // pause frames while user is talking
+
+function pauseFrames() { framesPaused = true; }
+function resumeFrames() { framesPaused = false; }
+
 function startFrameLoop() {
   stopFrameLoop();
   frameInterval = setInterval(() => {
-    if (awaitingResponse) return;
+    if (awaitingResponse || framesPaused) return;
     const gps = getGPS();
     if (!gps) return;
     const imageB64 = captureFrame();
@@ -199,6 +204,7 @@ async function cleanup(state) {
       clearARLabels();
       hideSubtitle();
       stopSpeaking();
+      stopListening();
       cancelGPSDisplay();
       break;
     case State.INSPECTING:
@@ -231,6 +237,8 @@ function hideGPSOverlay() {
 // ═══════════════════════════════════════════
 
 async function enterAnalyzing() {
+  unlockAudio();  // unlock TTS on mobile (requires user gesture context)
+
   const container = document.getElementById('screen-analyzing');
   container.innerHTML = await loadScreen('active-analysis');
   showScreen('screen-analyzing');
@@ -267,28 +275,48 @@ async function enterAnalyzing() {
     transitionTo(State.IDLE);
   });
 
+  // Voice button — toggles conversational mic
+  let voiceActive = false;
   document.getElementById('btn-voice')?.addEventListener('click', () => {
-    const muted = toggleMute();
     const btn = document.getElementById('btn-voice');
     const icon = btn?.querySelector('.material-symbols-outlined');
     const label = btn?.querySelector('.font-label');
-    if (icon) icon.textContent = muted ? 'volume_off' : 'mic';
-    if (label) label.textContent = muted ? 'MUTED' : 'VOICE';
-    btn?.classList.toggle('text-white/40', !muted);
-    btn?.classList.toggle('text-white/30', muted);
-  });
 
-  // Sync mute button to current audio state (persists across screen transitions)
-  const currentlyMuted = isMuted();
-  if (currentlyMuted) {
-    const voiceBtn = document.getElementById('btn-voice');
-    const voiceIcon = voiceBtn?.querySelector('.material-symbols-outlined');
-    const voiceLabel = voiceBtn?.querySelector('.font-label');
-    if (voiceIcon) voiceIcon.textContent = 'volume_off';
-    if (voiceLabel) voiceLabel.textContent = 'MUTED';
-    voiceBtn?.classList.remove('text-white/40');
-    voiceBtn?.classList.add('text-white/30');
-  }
+    if (!voiceActive) {
+      // Start listening — user can talk to the agent
+      pauseFrames();  // stop sending frames while user talks
+      const started = startListening(
+        // onResult: user finished a phrase
+        (transcript) => {
+          showSubtitle(`You: "${transcript}"`);
+          sendMessage({ type: 'chat', text: transcript });
+          awaitingResponse = true;
+          setLoading(true);
+        },
+        // onStart: user began speaking — interrupt TTS
+        () => {
+          stopSpeaking();
+          hideSubtitle();
+        }
+      );
+      if (started) {
+        voiceActive = true;
+        if (icon) icon.textContent = 'mic';
+        if (label) label.textContent = 'TALKING';
+        btn?.classList.remove('text-white/40');
+        btn?.classList.add('text-primary');
+      }
+    } else {
+      // Stop listening and resume frame sending
+      stopListening();
+      resumeFrames();
+      voiceActive = false;
+      if (icon) icon.textContent = 'mic_off';
+      if (label) label.textContent = 'VOICE';
+      btn?.classList.remove('text-primary');
+      btn?.classList.add('text-white/40');
+    }
+  });
 
   // Camera button disabled (facing-mode toggle not widely supported)
   // document.getElementById('btn-cam')?.addEventListener('click', () => {

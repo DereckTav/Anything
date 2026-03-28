@@ -3,7 +3,7 @@ from .tools import pluto, complaints, vision_zero, tree_census, geocoder, air_qu
 from .prompts import SYSTEM_PROMPT
 
 root_agent = LlmAgent(
-    model="gemini-2.5-pro",
+    model="gemini-2.5-flash",
     name="urbanlens_agent",
     description="Real-time NYC urban site analyst with vision and voice",
     instruction=SYSTEM_PROMPT,
