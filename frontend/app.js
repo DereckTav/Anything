@@ -2,29 +2,30 @@ import {
   startCamera, stopCamera, captureFrame, getGPS, seedGPS,
   connectWebSocket, disconnectWebSocket, sendMessage, isConnected,
 } from './camera.js';
-import { speakNarration, stopSpeaking, toggleMute, isMuted, unlockAudio, startVoice, stopVoice, isVoiceConnected, sendVoiceFrame } from './audio.js';
+import {
+  speakNarration, stopSpeaking, toggleMute, isMuted, unlockAudio,
+  startVoice, stopVoice, isVoiceConnected, sendVoiceFrame,
+} from './audio.js';
 import { renderARLabels, clearARLabels, showSubtitle, hideSubtitle } from './overlay.js';
 
-// ── State machine ──
+// ── State machine ──────────────────────────────────────────────
 
 const State = Object.freeze({
-  IDLE: 'IDLE',
-  ANALYZING: 'ANALYZING',
-  INSPECTING: 'INSPECTING',
-  REPORT: 'REPORT',
+  IDLE:       'IDLE',
+  EXPLORING:  'EXPLORING',
+  NEARBY:     'NEARBY',
+  DETAIL:     'DETAIL',
 });
 
-let currentState = State.IDLE;
-let frameInterval = null;
-let sessionId = crypto.randomUUID().slice(0, 8);
-let pausedFrameDataUrl = null;
-let sessionStartTime = null;
-let gpsDisplayRAF = null;
-let awaitingResponse = false;
+let currentState     = State.IDLE;
+let voiceActive      = false;
 let voiceFrameInterval = null;
-let voiceActive = false;
+let gpsDisplayRAF    = null;
+let discoveryTimer   = null;
+let currentPOIs      = [];   // last received poi_chips
+let selectedPOI      = null; // POI tapped in nearby list or chips
 
-// ── Screen loading ──
+// ── Screen loading ─────────────────────────────────────────────
 
 const screenCache = {};
 
@@ -45,47 +46,26 @@ function showScreen(id) {
   const target = document.getElementById(id);
   if (!target) return;
   target.classList.remove('hidden');
-  // Force reflow then fade in
   void target.offsetHeight;
-  requestAnimationFrame(() => {
-    target.style.opacity = '1';
-  });
+  requestAnimationFrame(() => { target.style.opacity = '1'; });
 }
 
-// ── Session timer ──
-
-function getSessionDuration() {
-  if (!sessionStartTime) return '0m 0s';
-  const diff = Math.floor((Date.now() - sessionStartTime) / 1000);
-  const min = Math.floor(diff / 60);
-  const sec = diff % 60;
-  return `${min}m ${sec.toString().padStart(2, '0')}s`;
-}
-
-// ── WebSocket message handler ──
+// ── WebSocket message handler ──────────────────────────────────
 
 function handleWSMessage(data) {
-  awaitingResponse = false;
-  setLoading(false);
-
   switch (data.type) {
     case 'narration':
-      if (currentState === State.ANALYZING && !voiceActive) {
+      if (currentState === State.EXPLORING && !voiceActive) {
         speakNarration(data.text);
-        if (data.ar_labels?.length) renderARLabels(data.ar_labels);
+        showSubtitle(data.text);
       }
       break;
 
-    case 'layer_data':
-      if (currentState === State.INSPECTING) {
-        hideInspectorLoading();
-        populateLayerInspector(data);
+    case 'poi_chips':
+      if (data.pois?.length) {
+        currentPOIs = data.pois;
+        if (currentState === State.EXPLORING) renderPOIChips(data.pois);
       }
-      break;
-
-    case 'report':
-      sessionId = data.report_id || sessionId;
-      transitionTo(State.REPORT, data);
       break;
 
     case 'gps_required':
@@ -94,189 +74,150 @@ function handleWSMessage(data) {
 
     case 'error':
       console.error('[WS] Backend error:', data.message);
-      showSubtitle(`Error: ${data.message || 'Something went wrong'}`);
       break;
   }
 }
 
-function handleWSDisconnect() {
-  if (currentState === State.ANALYZING) {
-    showSubtitle('Connection lost — reconnecting...');
-  }
-}
+// ── POI chip rendering ─────────────────────────────────────────
 
-function handleWSReconnect() {
-  if (currentState === State.ANALYZING) {
-    hideSubtitle();
-  }
-}
+function renderPOIChips(pois) {
+  const container = document.getElementById('poi-chips-container');
+  if (!container) return;
 
-// ── Loading indicator ──
+  container.innerHTML = '';
+  pois.slice(0, 5).forEach(poi => {
+    const chip = document.createElement('button');
+    chip.className = [
+      'flex-shrink-0 glass-panel rounded-full px-4 py-2',
+      'border border-primary/20 hover:border-primary/60 transition-all duration-200',
+      'flex items-center gap-2 max-w-[220px]',
+      'active:scale-95',
+    ].join(' ');
 
-function setLoading(show) {
-  const el = document.getElementById('loading-indicator');
-  if (!el) return;
-  el.classList.toggle('hidden', !show);
-}
+    const walkText = poi.walk_min != null ? `${poi.walk_min} min` : '';
 
-function hideInspectorLoading() {
-  const el = document.getElementById('inspector-loading');
-  if (el) el.classList.add('hidden');
-  // Reveal the data cards with staggered animation
-  const cards = ['card-zoning', 'card-environment', 'card-safety', 'card-311'];
-  cards.forEach((id, i) => {
-    const card = document.getElementById(id);
-    if (!card) return;
-    card.style.opacity = '0';
-    card.style.transform = 'translateY(12px)';
-    card.style.transition = 'opacity 400ms ease, transform 400ms ease';
-    card.classList.remove('hidden');
-    setTimeout(() => {
-      card.style.opacity = '1';
-      card.style.transform = 'translateY(0)';
-    }, 100 * i);
+    chip.innerHTML = `
+      <span class="material-symbols-outlined text-sm text-primary/70">place</span>
+      <span class="font-body text-xs text-white truncate">${escapeHTML(poi.name)}</span>
+      ${walkText ? `<span class="font-label text-[9px] text-primary/50 flex-shrink-0">${escapeHTML(walkText)}</span>` : ''}
+    `;
+
+    chip.addEventListener('click', () => openPlaceDetail(poi));
+    container.appendChild(chip);
   });
 }
 
-// ── Frame capture loop ──
-
-let framesPaused = false;  // pause frames while user is talking
-
-function pauseFrames() { framesPaused = true; stopFrameLoop(); }
-function resumeFrames() { framesPaused = false; startFrameLoop(); }
-
-function startFrameLoop() {
-  stopFrameLoop();
-  frameInterval = setInterval(() => {
-    if (awaitingResponse || framesPaused) return;
-    const gps = getGPS();
-    if (!gps) return;
-    const imageB64 = captureFrame();
-    if (!imageB64) return;
-
-    sendMessage({
-      type: 'frame',
-      image_b64: imageB64,
-      gps: { lat: gps.lat, lng: gps.lng },
-    });
-
-    awaitingResponse = true;
-    setLoading(true);
-  }, 2000);
+function clearPOIChips() {
+  const container = document.getElementById('poi-chips-container');
+  if (container) container.innerHTML = '';
 }
 
-function stopFrameLoop() {
-  if (frameInterval) {
-    clearInterval(frameInterval);
-    frameInterval = null;
+// ── Proactive discovery loop ───────────────────────────────────
+
+function startDiscoveryLoop() {
+  stopDiscoveryLoop();
+  // Fire once immediately, then every 60s
+  triggerDiscovery();
+  discoveryTimer = setInterval(triggerDiscovery, 60_000);
+}
+
+function stopDiscoveryLoop() {
+  if (discoveryTimer) {
+    clearInterval(discoveryTimer);
+    discoveryTimer = null;
   }
-  awaitingResponse = false;
 }
 
-// ── State transitions ──
+function triggerDiscovery() {
+  const gps = getGPS();
+  if (!gps || currentState !== State.EXPLORING) return;
+  sendMessage({ type: 'discover', gps: { lat: gps.lat, lng: gps.lng } });
+}
+
+// ── State transitions ──────────────────────────────────────────
 
 async function transitionTo(newState, payload = null) {
   await cleanup(currentState);
   currentState = newState;
 
   switch (newState) {
-    case State.IDLE:
-      showScreen('screen-idle');
-      resetSession();
-      break;
-
-    case State.ANALYZING:
-      await enterAnalyzing();
-      break;
-
-    case State.INSPECTING:
-      await enterInspecting();
-      break;
-
-    case State.REPORT:
-      await enterReport(payload);
-      break;
+    case State.IDLE:       showScreen('screen-idle'); resetSession(); break;
+    case State.EXPLORING:  await enterExploring(); break;
+    case State.NEARBY:     await enterNearby(); break;
+    case State.DETAIL:     await enterDetail(payload); break;
   }
 }
 
 async function cleanup(state) {
   switch (state) {
-    case State.ANALYZING:
-      stopFrameLoop();
+    case State.EXPLORING:
+      stopDiscoveryLoop();
+      stopVoiceMode();
       clearARLabels();
       hideSubtitle();
       stopSpeaking();
-      stopVoice();
       cancelGPSDisplay();
       break;
-    case State.INSPECTING:
-      break;
-    case State.REPORT:
-      stopSpeaking();
+    case State.NEARBY:
+    case State.DETAIL:
       break;
   }
 }
 
 function resetSession() {
-  sessionId = crypto.randomUUID().slice(0, 8);
-  sessionStartTime = null;
-  pausedFrameDataUrl = null;
-  awaitingResponse = false;
+  currentPOIs  = [];
+  selectedPOI  = null;
+  voiceActive  = false;
 }
 
-// ── GPS overlay ──
+// ── GPS overlay ────────────────────────────────────────────────
 
 function showGPSOverlay() {
   document.getElementById('gps-overlay')?.classList.remove('hidden');
 }
-
 function hideGPSOverlay() {
   document.getElementById('gps-overlay')?.classList.add('hidden');
 }
 
-// ═══════════════════════════════════════════
-// Enter: ANALYZING
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// Enter: EXPLORING
+// ═══════════════════════════════════════════════════════════════
 
-async function enterAnalyzing() {
-  unlockAudio();  // unlock TTS on mobile (requires user gesture context)
+async function enterExploring() {
+  unlockAudio();
 
-  const container = document.getElementById('screen-analyzing');
-  container.innerHTML = await loadScreen('active-analysis');
-  showScreen('screen-analyzing');
-
-  if (!sessionStartTime) sessionStartTime = Date.now();
+  const container = document.getElementById('screen-exploring');
+  container.innerHTML = await loadScreen('explore');
+  showScreen('screen-exploring');
 
   try {
     await startCamera(document.getElementById('camera-feed'));
   } catch (err) {
-    console.error('[Camera] Failed:', err);
-    showSubtitle('Camera access denied. Please allow camera permissions.');
-    return;
+    console.error('[Camera]', err);
+    showSubtitle('Camera access denied — voice guide still works.');
   }
 
-  connectWebSocket(handleWSMessage, handleWSDisconnect, handleWSReconnect);
-
-  // Wait briefly for first GPS fix
+  connectWebSocket(handleWSMessage, () => {}, () => {});
   await waitForGPS(3000);
-  // Frame analysis disabled — voice only
-  // startFrameLoop();
   startGPSDisplay();
+  startDiscoveryLoop();
 
-  // Button handlers
-  document.getElementById('btn-inspect')?.addEventListener('click', () => {
-    transitionTo(State.INSPECTING);
+  // Voice button
+  document.getElementById('btn-voice')?.addEventListener('click', toggleVoiceMode);
+
+  // Nearby button
+  document.getElementById('btn-nearby')?.addEventListener('click', () => {
+    transitionTo(State.NEARBY);
   });
 
-  document.getElementById('btn-stop')?.addEventListener('click', () => {
-    sendMessage({ type: 'end' });
-  });
-
+  // Exit button
   document.getElementById('btn-close-analysis')?.addEventListener('click', () => {
     stopCamera();
     disconnectWebSocket();
     transitionTo(State.IDLE);
   });
+<<<<<<< HEAD
+=======
 
   // Voice button — toggles real-time voice conversation via Gemini Live
   function deactivateVoice() {
@@ -305,28 +246,23 @@ async function enterAnalyzing() {
 
       const gps = getGPS();
       let agentBuf = '';
-      let userBuf = '';
       const started = await startVoice(
         (msg) => {
           if (msg.role === 'agent') {
             agentBuf += msg.text;
-            // Show last ~120 chars for rolling caption
             const display = agentBuf.length > 120 ? '...' + agentBuf.slice(-120) : agentBuf;
             showSubtitle(display);
           } else if (msg.role === 'user') {
-            userBuf += msg.text;
-            const display = userBuf.length > 80 ? '...' + userBuf.slice(-80) : userBuf;
-            showSubtitle(display);
+            // Local recognition sends full interim text
+            showSubtitle(msg.text);
           }
         },
         (status) => {
           if (status === 'listening' && voiceActive) {
             if (label) label.textContent = 'LISTENING';
             agentBuf = '';
-            userBuf = '';
           } else if (status === 'speaking' && voiceActive) {
             if (label) label.textContent = 'SPEAKING';
-            userBuf = '';
           }
         },
         gps,
@@ -369,16 +305,89 @@ async function enterAnalyzing() {
   //   const icon = document.querySelector('#btn-cam .material-symbols-outlined');
   //   if (icon) icon.classList.toggle('filled');
   // });
+>>>>>>> refs/remotes/origin/main
 }
+
+// ── Voice mode ────────────────────────────────────────────────
+
+async function toggleVoiceMode() {
+  const btn   = document.getElementById('btn-voice');
+  const icon  = btn?.querySelector('.material-symbols-outlined');
+  const label = btn?.querySelector('.font-label');
+  const statusBar   = document.getElementById('voice-status-bar');
+  const statusLabel = document.getElementById('voice-status-label');
+
+  if (!voiceActive) {
+    stopSpeaking();
+    const gps = getGPS();
+
+    const started = await startVoice(
+      (msg) => {
+        // Show rolling transcript as subtitle
+        if (msg.role === 'agent' || msg.role === 'user') {
+          const text = msg.text || '';
+          const display = text.length > 120 ? '...' + text.slice(-120) : text;
+          showSubtitle(display);
+        }
+      },
+      (status) => {
+        if (!voiceActive) return;
+        const labels = { listening: 'Listening', speaking: 'Speaking', idle: 'Voice' };
+        if (statusLabel) statusLabel.textContent = labels[status] || 'Voice';
+        if (status === 'listening' || status === 'idle') {
+          if (label) label.textContent = status === 'listening' ? 'LISTENING' : 'VOICE';
+        } else if (status === 'speaking') {
+          if (label) label.textContent = 'SPEAKING';
+        }
+      },
+      gps
+    );
+
+    if (started) {
+      voiceActive = true;
+      if (icon)  icon.textContent = 'mic';
+      if (label) label.textContent = 'LISTENING';
+      btn?.classList.remove('text-white/60');
+      btn?.classList.add('text-primary', 'scale-110');
+      statusBar?.classList.remove('hidden');
+
+      // Send camera frame for visual context every 8s
+      voiceFrameInterval = setInterval(() => {
+        const frame = captureFrame();
+        if (frame) sendVoiceFrame(frame);
+      }, 8000);
+      const firstFrame = captureFrame();
+      if (firstFrame) sendVoiceFrame(firstFrame);
+    }
+
+  } else {
+    stopVoiceMode();
+    if (icon)  icon.textContent = 'mic';
+    if (label) label.textContent = 'VOICE';
+    btn?.classList.remove('text-primary', 'scale-110');
+    btn?.classList.add('text-white/60');
+    hideSubtitle();
+  }
+}
+
+function stopVoiceMode() {
+  if (!voiceActive) return;
+  voiceActive = false;
+  stopVoice();
+  if (voiceFrameInterval) {
+    clearInterval(voiceFrameInterval);
+    voiceFrameInterval = null;
+  }
+  document.getElementById('voice-status-bar')?.classList.add('hidden');
+}
+
+// ── GPS display ────────────────────────────────────────────────
 
 function waitForGPS(timeoutMs) {
   return new Promise(resolve => {
     const start = Date.now();
     const check = () => {
-      if (getGPS() || Date.now() - start > timeoutMs) {
-        resolve();
-        return;
-      }
+      if (getGPS() || Date.now() - start > timeoutMs) { resolve(); return; }
       setTimeout(check, 200);
     };
     check();
@@ -388,20 +397,17 @@ function waitForGPS(timeoutMs) {
 function startGPSDisplay() {
   const el = document.getElementById('gps-coords');
   if (!el) return;
-  let lastUpdate = 0;
+  let lastTs = 0;
   const update = (ts) => {
-    if (currentState !== State.ANALYZING) return;
-    // Throttle to ~2fps
-    if (ts - lastUpdate > 500) {
+    if (currentState !== State.EXPLORING) return;
+    if (ts - lastTs > 500) {
       const gps = getGPS();
       if (gps) {
-        const lat = gps.lat.toFixed(5);
-        const lng = Math.abs(gps.lng).toFixed(5);
         const ns = gps.lat >= 0 ? 'N' : 'S';
         const ew = gps.lng >= 0 ? 'E' : 'W';
-        el.textContent = `${lat}° ${ns}, ${lng}° ${ew}`;
+        el.textContent = `${gps.lat.toFixed(4)}°${ns} ${Math.abs(gps.lng).toFixed(4)}°${ew}`;
       }
-      lastUpdate = ts;
+      lastTs = ts;
     }
     gpsDisplayRAF = requestAnimationFrame(update);
   };
@@ -409,259 +415,126 @@ function startGPSDisplay() {
 }
 
 function cancelGPSDisplay() {
-  if (gpsDisplayRAF) {
-    cancelAnimationFrame(gpsDisplayRAF);
-    gpsDisplayRAF = null;
-  }
+  if (gpsDisplayRAF) { cancelAnimationFrame(gpsDisplayRAF); gpsDisplayRAF = null; }
 }
 
-// ═══════════════════════════════════════════
-// Enter: INSPECTING
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// Enter: NEARBY
+// ═══════════════════════════════════════════════════════════════
 
-async function enterInspecting() {
-  pausedFrameDataUrl = captureFrame(true);
-  stopFrameLoop();
-  stopSpeaking();
-  clearARLabels();
-  hideSubtitle();
+async function enterNearby() {
+  const container = document.getElementById('screen-nearby');
+  container.innerHTML = await loadScreen('nearby');
+  showScreen('screen-nearby');
 
-  sendMessage({ type: 'pause' });
-
-  const container = document.getElementById('screen-inspecting');
-  container.innerHTML = await loadScreen('layer-inspector');
-  showScreen('screen-inspecting');
-
-  // Set paused frame background
-  const pausedImg = document.getElementById('paused-frame');
-  if (pausedImg && pausedFrameDataUrl) {
-    pausedImg.src = pausedFrameDataUrl;
-  }
-
-  // Set coordinates
-  const gps = getGPS();
-  if (gps) {
-    const coordsEl = document.getElementById('inspector-coords');
-    if (coordsEl) {
-      const ns = gps.lat >= 0 ? 'N' : 'S';
-      const ew = gps.lng >= 0 ? 'E' : 'W';
-      coordsEl.textContent = `GEO: ${gps.lat.toFixed(5)}° ${ns}, ${Math.abs(gps.lng).toFixed(5)}° ${ew}`;
-    }
-  }
-
-  // Button handlers
-  document.getElementById('btn-resume')?.addEventListener('click', () => {
-    transitionTo(State.ANALYZING);
+  document.getElementById('btn-back-nearby')?.addEventListener('click', () => {
+    transitionTo(State.EXPLORING);
   });
 
-  document.getElementById('btn-feed')?.addEventListener('click', () => {
-    transitionTo(State.ANALYZING);
-  });
+  const listEl     = document.getElementById('nearby-list');
+  const loadingEl  = document.getElementById('nearby-loading');
+  const emptyEl    = document.getElementById('nearby-empty');
 
-  document.getElementById('btn-exit')?.addEventListener('click', () => {
-    stopCamera();
-    disconnectWebSocket();
-    transitionTo(State.IDLE);
-  });
-
-  document.getElementById('btn-audio-inspector')?.addEventListener('click', () => {
-    const muted = toggleMute();
-    const icon = document.querySelector('#btn-audio-inspector .material-symbols-outlined');
-    if (icon) icon.textContent = muted ? 'volume_off' : 'mic';
-  });
-}
-
-function populateLayerInspector(data) {
-  if (currentState !== State.INSPECTING) return;
-
-  // Zoning
-  if (data.zoning) {
-    setText('zoning-district', data.zoning.district);
-    setText('zoning-far', data.zoning.far);
-    setText('zoning-description', data.zoning.description);
+  if (!currentPOIs.length) {
+    loadingEl?.classList.add('hidden');
+    emptyEl?.classList.remove('hidden');
+    return;
   }
 
-  // Environment
-  if (data.environment) {
-    const pct = data.environment.canopy_pct;
-    setText('env-canopy-pct', pct != null ? `${pct}%` : null);
-    const bar = document.getElementById('env-canopy-bar');
-    if (bar && pct != null) bar.style.width = `${Math.min(pct, 100)}%`;
+  loadingEl?.classList.add('hidden');
+  listEl?.classList.remove('hidden');
 
-    setText('env-aqi', data.environment.aqi);
+  currentPOIs.forEach(poi => {
+    const item = document.createElement('button');
+    item.className = [
+      'w-full glass-panel rounded-xl p-4 border border-outline-variant/30',
+      'hover:border-primary/30 transition-all duration-200 text-left active:scale-[0.98]',
+    ].join(' ');
 
-    const aqiCat = document.getElementById('env-aqi-cat');
-    if (aqiCat && data.environment.aqi_category) {
-      aqiCat.textContent = data.environment.aqi_category;
-      // Color-code based on AQI category
-      const cat = data.environment.aqi_category.toLowerCase();
-      if (cat === 'good') {
-        aqiCat.className = 'font-label text-[9px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-400';
-      } else if (cat === 'moderate') {
-        aqiCat.className = 'font-label text-[9px] px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400';
-      } else {
-        aqiCat.className = 'font-label text-[9px] px-2 py-0.5 rounded-full bg-error/15 text-error';
-      }
-    }
-  }
+    const walkText = poi.walk_min != null ? `${poi.walk_min} min walk` : '';
 
-  // Safety
-  if (data.safety) {
-    const floodEl = document.getElementById('safety-flood');
-    if (floodEl) {
-      floodEl.textContent = data.safety.flood_risk || '—';
-      if (data.safety.flood_risk === 'High Risk') {
-        floodEl.classList.add('text-error');
-      }
-    }
-    setText('safety-response', data.safety.emergency_response_min != null
-      ? `${data.safety.emergency_response_min} min` : null);
-  }
-
-  // 311 Complaints
-  if (data.activity_311?.complaints) {
-    const list = document.getElementById('complaints-list');
-    if (!list) return;
-
-    if (data.activity_311.complaints.length === 0) {
-      list.innerHTML = `
-        <p class="font-body text-xs text-on-surface-variant/50 italic">No recent complaints in this area.</p>
-      `;
-      return;
-    }
-
-    list.innerHTML = data.activity_311.complaints.map(c => `
-      <div class="flex gap-3">
-        <div class="w-1 min-h-[32px] rounded-full bg-primary/40 flex-shrink-0"></div>
+    item.innerHTML = `
+      <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <span class="font-label text-[10px] text-primary/70 uppercase block">${escapeHTML(c.type)}</span>
-          <p class="font-body text-xs text-on-surface-variant mt-0.5 leading-relaxed">${escapeHTML(c.description)}</p>
+          <span class="font-label text-[8px] uppercase tracking-wider text-primary/60 block mb-0.5">
+            ${escapeHTML(poi.type || 'Place')}
+          </span>
+          <h3 class="font-headline italic text-lg text-primary leading-tight truncate">
+            ${escapeHTML(poi.name)}
+          </h3>
+          ${poi.address ? `<p class="font-label text-[10px] text-on-surface-variant/50 mt-1 truncate">${escapeHTML(poi.address)}</p>` : ''}
+        </div>
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          ${walkText ? `
+          <div class="flex items-center gap-1 text-primary/70">
+            <span class="material-symbols-outlined text-sm">directions_walk</span>
+            <span class="font-label text-[10px]">${escapeHTML(walkText)}</span>
+          </div>` : ''}
+          <span class="material-symbols-outlined text-sm text-white/20">chevron_right</span>
         </div>
       </div>
-    `).join('');
-  }
+    `;
+
+    item.addEventListener('click', () => openPlaceDetail(poi));
+    listEl?.appendChild(item);
+  });
 }
 
-// ═══════════════════════════════════════════
-// Enter: REPORT
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// Open: DETAIL
+// ═══════════════════════════════════════════════════════════════
 
-async function enterReport(payload) {
-  stopCamera();
-  disconnectWebSocket();
+function openPlaceDetail(poi) {
+  selectedPOI = poi;
+  transitionTo(State.DETAIL, poi);
+}
 
-  const container = document.getElementById('screen-report');
-  container.innerHTML = await loadScreen('synthesis-report');
-  showScreen('screen-report');
+async function enterDetail(poi) {
+  const container = document.getElementById('screen-detail');
+  container.innerHTML = await loadScreen('place-detail');
+  showScreen('screen-detail');
 
-  if (payload) populateReport(payload);
+  if (!poi) return;
 
-  // Button handlers
-  document.getElementById('btn-export-pdf')?.addEventListener('click', () => {
-    if (sessionId) {
-      window.location.href = `/report/${sessionId}/pdf`;
+  // Populate fields
+  setText('detail-name',    poi.name);
+  setText('detail-type',    poi.type || 'Point of Interest');
+  setText('detail-address', poi.address || '—');
+
+  if (poi.walk_min != null) {
+    const walkText = poi.walk_min < 1 ? 'under 1 min walk' : `${poi.walk_min} min walk`;
+    setText('detail-walk-time', walkText);
+  }
+
+  if (poi.lat != null && poi.lng != null) {
+    const ns = poi.lat >= 0 ? 'N' : 'S';
+    const ew = poi.lng >= 0 ? 'E' : 'W';
+    setText('detail-coords', `${Math.abs(poi.lat).toFixed(5)}°${ns}, ${Math.abs(poi.lng).toFixed(5)}°${ew}`);
+  }
+
+  // Maps link
+  const mapsBtn = document.getElementById('btn-take-me-there');
+  if (mapsBtn) {
+    if (poi.maps_url) {
+      mapsBtn.href = poi.maps_url;
+    } else if (poi.lat != null && poi.lng != null) {
+      const encoded = encodeURIComponent(poi.name);
+      mapsBtn.href = `https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lng}&travelmode=walking&destination_place=${encoded}`;
+    }
+  }
+
+  // Back button — go back to wherever we came from
+  document.getElementById('btn-back-detail')?.addEventListener('click', () => {
+    // If NEARBY had POIs loaded, return there; otherwise go to EXPLORING
+    if (currentPOIs.length > 0) {
+      transitionTo(State.NEARBY);
+    } else {
+      transitionTo(State.EXPLORING);
     }
   });
-
-  document.getElementById('btn-discard')?.addEventListener('click', () => {
-    transitionTo(State.IDLE);
-  });
-
-  document.getElementById('btn-listen')?.addEventListener('click', () => {
-    // Read the verdict aloud
-    const verdict = document.getElementById('verdict-text');
-    if (verdict) speakNarration(verdict.textContent);
-  });
 }
 
-function populateReport(data) {
-  setText('report-id', data.report_id);
-  setText('report-location', data.location?.address);
-  setText('report-date', data.date);
-  setText('report-duration', data.duration || getSessionDuration());
-
-  // Narrative timeline
-  const timeline = document.getElementById('narrative-timeline');
-  if (timeline && data.narrative_log?.length) {
-    // Remove empty state and rebuild
-    const emptyMsg = document.getElementById('timeline-empty');
-    if (emptyMsg) emptyMsg.remove();
-    const timelineLine = timeline.querySelector('.absolute');
-    timeline.innerHTML = '';
-    if (timelineLine) timeline.appendChild(timelineLine);
-
-    data.narrative_log.forEach((entry, i) => {
-      const isLast = i === data.narrative_log.length - 1;
-      const node = document.createElement('div');
-      node.className = 'relative pb-6';
-      if (isLast) node.classList.add('pb-0');
-      node.innerHTML = `
-        <div class="absolute left-[-21px] top-1.5 w-[10px] h-[10px] rounded-full border-2 ${
-          isLast ? 'border-primary bg-primary/20' : 'border-outline-variant/40 bg-background'
-        }"></div>
-        <span class="font-label text-[10px] text-primary/70 block">${escapeHTML(entry.timestamp)}</span>
-        <p class="font-body text-sm text-on-surface mt-1 leading-relaxed">${highlightTerms(escapeHTML(entry.text))}</p>
-      `;
-      // Stagger entry appearance
-      node.style.opacity = '0';
-      node.style.transform = 'translateY(8px)';
-      node.style.transition = 'opacity 400ms ease, transform 400ms ease';
-      timeline.appendChild(node);
-
-      setTimeout(() => {
-        node.style.opacity = '1';
-        node.style.transform = 'translateY(0)';
-      }, 80 * i);
-    });
-  }
-
-  // Captured stills
-  const scroll = document.getElementById('stills-scroll');
-  if (scroll && data.captured_stills?.length) {
-    const stillsEmpty = document.getElementById('stills-empty');
-    if (stillsEmpty) stillsEmpty.remove();
-    scroll.innerHTML = data.captured_stills.map(still => `
-      <div class="min-w-[280px] bg-surface-container rounded-lg overflow-hidden flex-shrink-0">
-        <div class="relative h-48">
-          <img src="data:image/jpeg;base64,${still.image_b64}" alt="Captured still"
-            class="w-full h-full object-cover" loading="lazy">
-          <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
-          <div class="absolute bottom-3 left-3 flex flex-wrap gap-1.5">
-            ${(still.tags || []).map(tag => `
-              <span class="font-label text-[8px] px-2 py-0.5 rounded-full border
-                ${tag === 'SAFETY' ? 'bg-error/20 border-error/30 text-error' : 'bg-primary/20 border-primary/30 text-primary'}">
-                ${escapeHTML(tag)}
-              </span>
-            `).join('')}
-          </div>
-        </div>
-        <div class="p-3">
-          <span class="font-label text-[10px] text-on-surface-variant/50">${escapeHTML(still.timestamp)}</span>
-        </div>
-      </div>
-    `).join('');
-  }
-
-  // Verdict
-  const verdict = document.getElementById('verdict-text');
-  if (verdict && data.verdict) {
-    verdict.innerHTML = `
-      <span class="text-primary font-bold text-lg">${data.verdict.score}/10</span>
-      <span class="mx-2 text-outline-variant">—</span>
-      ${escapeHTML(data.verdict.summary)}
-    `;
-  }
-}
-
-/** Highlight data-sourced terms in narration text (zoning codes, numbers, etc.) */
-function highlightTerms(text) {
-  return text
-    .replace(/\b(R\d[\w-]*|C\d[\w-]*|M\d[\w-]*)\b/g, '<span class="text-primary font-medium">$1</span>')
-    .replace(/\b(FAR\s*[\d.]+|AQI\s*[\d]+)\b/gi, '<span class="text-primary font-medium">$1</span>')
-    .replace(/\b(\d+%)\b/g, '<span class="text-primary font-medium">$1</span>');
-}
-
-// ── Utilities ──
+// ── Utilities ──────────────────────────────────────────────────
 
 function setText(id, value) {
   const el = document.getElementById(id);
@@ -675,36 +548,29 @@ function escapeHTML(str) {
   return div.innerHTML;
 }
 
-// ── GPS permission flow ──
+// ── GPS permission flow ────────────────────────────────────────
 
 async function requestPermissions() {
   const startBtn = document.getElementById('btn-start');
-  if (startBtn) {
-    startBtn.disabled = true;
-    startBtn.style.opacity = '0.6';
-  }
+  if (startBtn) { startBtn.disabled = true; startBtn.style.opacity = '0.6'; }
 
   try {
-    const position = await new Promise((resolve, reject) => {
+    const position = await new Promise((resolve, reject) =>
       navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true,
-        timeout: 10000,
-      });
-    });
+        enableHighAccuracy: true, timeout: 10000,
+      })
+    );
     seedGPS(position);
     hideGPSOverlay();
-    transitionTo(State.ANALYZING);
+    transitionTo(State.EXPLORING);
   } catch {
     showGPSOverlay();
   } finally {
-    if (startBtn) {
-      startBtn.disabled = false;
-      startBtn.style.opacity = '1';
-    }
+    if (startBtn) { startBtn.disabled = false; startBtn.style.opacity = '1'; }
   }
 }
 
-// ── Init ──
+// ── Init ───────────────────────────────────────────────────────
 
 function init() {
   document.getElementById('btn-start')?.addEventListener('click', requestPermissions);

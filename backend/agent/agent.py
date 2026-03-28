@@ -1,18 +1,18 @@
 from google.adk.agents import LlmAgent
-from .tools import pluto, complaints, vision_zero, tree_census, geocoder, air_quality
+from google.adk.tools import google_search
+from .tools import get_nearby_pois, analyze_frame, get_distance, build_maps_url
 from .prompts import SYSTEM_PROMPT
 
 root_agent = LlmAgent(
     model="gemini-2.5-flash",
-    name="urbanlens_agent",
-    description="Real-time NYC urban site analyst with vision and voice",
+    name="waypoint_agent",
+    description="Brooklyn tourist guide — finds nearby places, identifies landmarks, provides walking directions",
     instruction=SYSTEM_PROMPT,
     tools=[
-        geocoder.get_block_info,
-        pluto.get_zoning_data,
-        complaints.get_311_complaints,
-        vision_zero.get_safety_data,
-        tree_census.get_canopy_data,
-        air_quality.get_air_quality,
+        get_nearby_pois,
+        analyze_frame,
+        get_distance,
+        build_maps_url,
+        google_search,
     ],
 )
