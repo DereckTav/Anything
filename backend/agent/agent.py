@@ -1,5 +1,4 @@
 from google.adk.agents import LlmAgent
-from google.genai import types
 from .tools import get_nearby_pois, analyze_frame, get_distance, build_maps_url
 from .tools.search import search_web
 from .prompts import SYSTEM_PROMPT
@@ -19,7 +18,4 @@ root_agent = LlmAgent(
         build_maps_url,
         search_web,
     ],
-    generate_content_config=types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
-    ),
 )
