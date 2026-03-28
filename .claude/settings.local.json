@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:google.github.io)",
+      "WebFetch(domain:codelabs.developers.google.com)"
+    ]
+  }
+}

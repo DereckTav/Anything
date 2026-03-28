@@ -1,0 +1,5 @@
+{
+  "name": "google-adk",
+  "version": "1.0.0",
+  "description": "Google Agent Development Kit (ADK) integration for building Gemini-powered agents"
+}

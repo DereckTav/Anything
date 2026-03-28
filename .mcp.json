@@ -1,0 +1,9 @@
+{
+  "TODO_rename_me": {
+    "command": "npx",
+    "args": ["-y", "YOUR_MCP_PACKAGE_HERE"],
+    "env": {
+      "YOUR_API_KEY": "${YOUR_API_KEY}"
+    }
+  }
+}
