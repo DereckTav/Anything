@@ -67,7 +67,7 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout) 
         sampleRate: 16000,
         channelCount: 1,
         echoCancellation: true,
-        noiseSuppression: true,
+        noiseSuppression: false,
         autoGainControl: true,
       }
     });
