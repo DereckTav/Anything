@@ -216,6 +216,7 @@ async function enterExploring() {
     disconnectWebSocket();
     transitionTo(State.IDLE);
   });
+
 }
 
 // ── Voice mode ────────────────────────────────────────────────
