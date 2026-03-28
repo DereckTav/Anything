@@ -205,6 +205,9 @@ async function enterExploring() {
   // Voice button
   document.getElementById('btn-voice')?.addEventListener('click', toggleVoiceMode);
 
+  // Auto-start voice
+  toggleVoiceMode();
+
   // Nearby button
   document.getElementById('btn-nearby')?.addEventListener('click', () => {
     transitionTo(State.NEARBY);
@@ -216,78 +219,6 @@ async function enterExploring() {
     disconnectWebSocket();
     transitionTo(State.IDLE);
   });
-<<<<<<< HEAD
-=======
-
-  // Voice button — toggles real-time voice conversation via Gemini Live
-  document.getElementById('btn-voice')?.addEventListener('click', async () => {
-    const btn = document.getElementById('btn-voice');
-    const icon = btn?.querySelector('.material-symbols-outlined');
-    const label = btn?.querySelector('.font-label');
-
-    if (!voiceActive) {
-      pauseFrames();  // stop sending frames while in voice mode
-      stopSpeaking(); // stop any TTS
-
-      const gps = getGPS();
-      let agentBuf = '';
-      const started = await startVoice(
-        (msg) => {
-          if (msg.role === 'agent') {
-            agentBuf += msg.text;
-            const display = agentBuf.length > 120 ? '...' + agentBuf.slice(-120) : agentBuf;
-            showSubtitle(display);
-          } else if (msg.role === 'user') {
-            // Local recognition sends full interim text
-            showSubtitle(msg.text);
-          }
-        },
-        (status) => {
-          if (status === 'listening' && voiceActive) {
-            if (label) label.textContent = 'LISTENING';
-            agentBuf = '';
-          } else if (status === 'speaking' && voiceActive) {
-            if (label) label.textContent = 'SPEAKING';
-          }
-        },
-        gps
-      );
-
-      if (started) {
-        voiceActive = true;
-        if (icon) icon.textContent = 'mic';
-        if (label) label.textContent = 'LISTENING';
-        btn?.classList.remove('text-white/40');
-        btn?.classList.add('text-primary');
-
-        // Send a frame for visual context every 5 seconds
-        voiceFrameInterval = setInterval(() => {
-          const frame = captureFrame();
-          if (frame) sendVoiceFrame(frame);
-        }, 5000);
-        // Send first frame immediately
-        const firstFrame = captureFrame();
-        if (firstFrame) sendVoiceFrame(firstFrame);
-      }
-    } else {
-      stopVoice();
-      resumeFrames();
-      voiceActive = false;
-      if (voiceFrameInterval) { clearInterval(voiceFrameInterval); voiceFrameInterval = null; }
-      if (icon) icon.textContent = 'mic_off';
-      if (label) label.textContent = 'VOICE';
-      btn?.classList.remove('text-primary');
-      btn?.classList.add('text-white/40');
-      hideSubtitle();
-    }
-  });
-
-  // Camera button disabled (facing-mode toggle not widely supported)
-  // document.getElementById('btn-cam')?.addEventListener('click', () => {
-  //   const icon = document.querySelector('#btn-cam .material-symbols-outlined');
-  //   if (icon) icon.classList.toggle('filled');
-  // });
->>>>>>> refs/remotes/origin/main
 }
 
 // ── Voice mode ────────────────────────────────────────────────
@@ -305,19 +236,21 @@ async function toggleVoiceMode() {
 
     const started = await startVoice(
       (msg) => {
-        // Show rolling transcript as subtitle
         if (msg.role === 'agent' || msg.role === 'user') {
           const text = msg.text || '';
           const display = text.length > 120 ? '...' + text.slice(-120) : text;
           showSubtitle(display);
+        } else if (msg.role === 'thinking') {
+          showSubtitle('<i>Thinking...</i>');
         }
       },
       (status) => {
         if (!voiceActive) return;
         const labels = { listening: 'Listening', speaking: 'Speaking', idle: 'Voice' };
         if (statusLabel) statusLabel.textContent = labels[status] || 'Voice';
-        if (status === 'listening' || status === 'idle') {
-          if (label) label.textContent = status === 'listening' ? 'LISTENING' : 'VOICE';
+        if (status === 'listening') {
+          if (label) label.textContent = 'LISTENING';
+          showSubtitle('...');
         } else if (status === 'speaking') {
           if (label) label.textContent = 'SPEAKING';
         }
@@ -333,13 +266,11 @@ async function toggleVoiceMode() {
       btn?.classList.add('text-primary', 'scale-110');
       statusBar?.classList.remove('hidden');
 
-      // Send camera frame for visual context every 8s
-      voiceFrameInterval = setInterval(() => {
-        const frame = captureFrame();
-        if (frame) sendVoiceFrame(frame);
-      }, 8000);
-      const firstFrame = captureFrame();
-      if (firstFrame) sendVoiceFrame(firstFrame);
+      // Camera frames disabled for faster voice response
+      // voiceFrameInterval = setInterval(() => {
+      //   const frame = captureFrame();
+      //   if (frame) sendVoiceFrame(frame);
+      // }, 8000);
     }
 
   } else {
