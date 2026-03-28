@@ -10,6 +10,7 @@ let micProcessor = null;
 let playing = false;
 let muted = false;
 let voiceConnected = false;
+let localRecognition = null;
 
 // TTS fallback state
 const ttsQueue = [];
@@ -98,18 +99,18 @@ export async function startVoice(onTranscript, onStatus, gps) {
       voiceConnected = true;
       if (onVoiceStatusCb) onVoiceStatusCb('listening');
       console.log('[Voice] Connected');
+      startLocalTranscription();
     };
 
     voiceWs.onmessage = (event) => {
       const msg = JSON.parse(event.data);
 
       if (msg.type === 'audio') {
-        // Play audio response (24kHz PCM base64)
         playPCMAudio(msg.data);
         if (onVoiceStatusCb) onVoiceStatusCb('speaking');
       } else if (msg.type === 'transcript') {
-        // Text transcription of speech
-        if (onTranscriptCb) onTranscriptCb(msg);
+        // Only show agent transcripts from server; user uses local recognition
+        if (msg.role === 'agent' && onTranscriptCb) onTranscriptCb(msg);
       } else if (msg.type === 'turn_complete') {
         if (onVoiceStatusCb) onVoiceStatusCb('listening');
       } else if (msg.type === 'error') {
@@ -137,6 +138,7 @@ export async function startVoice(onTranscript, onStatus, gps) {
 
 export function stopVoice() {
   voiceConnected = false;
+  stopLocalTranscription();
 
   if (micProcessor) {
     micProcessor.disconnect();
@@ -172,6 +174,51 @@ export function updateVoiceGPS(gps) {
 export function sendVoiceFrame(imageB64) {
   if (voiceWs && voiceWs.readyState === WebSocket.OPEN && imageB64) {
     voiceWs.send(JSON.stringify({ type: 'frame', image_b64: imageB64 }));
+  }
+}
+
+// ── Local Speech Recognition (fast user captions) ──
+
+function startLocalTranscription() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  if (localRecognition) { localRecognition.abort(); localRecognition = null; }
+
+  localRecognition = new SR();
+  localRecognition.continuous = true;
+  localRecognition.interimResults = true;
+  localRecognition.lang = 'en-US';
+
+  localRecognition.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      interim += e.results[i][0].transcript;
+    }
+    if (interim && onTranscriptCb) {
+      onTranscriptCb({ role: 'user', text: interim });
+    }
+  };
+
+  localRecognition.onend = () => {
+    // Auto-restart if still in voice mode
+    if (voiceConnected && !muted) {
+      try { localRecognition.start(); } catch (_) {}
+    }
+  };
+
+  localRecognition.onerror = (e) => {
+    if (e.error !== 'aborted' && e.error !== 'no-speech') {
+      console.warn('[LocalSTT]', e.error);
+    }
+  };
+
+  try { localRecognition.start(); } catch (_) {}
+}
+
+function stopLocalTranscription() {
+  if (localRecognition) {
+    localRecognition.abort();
+    localRecognition = null;
   }
 }
 

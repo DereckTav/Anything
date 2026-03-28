@@ -290,28 +290,23 @@ async function enterAnalyzing() {
 
       const gps = getGPS();
       let agentBuf = '';
-      let userBuf = '';
       const started = await startVoice(
         (msg) => {
           if (msg.role === 'agent') {
             agentBuf += msg.text;
-            // Show last ~120 chars for rolling caption
             const display = agentBuf.length > 120 ? '...' + agentBuf.slice(-120) : agentBuf;
             showSubtitle(display);
           } else if (msg.role === 'user') {
-            userBuf += msg.text;
-            const display = userBuf.length > 80 ? '...' + userBuf.slice(-80) : userBuf;
-            showSubtitle(display);
+            // Local recognition sends full interim text
+            showSubtitle(msg.text);
           }
         },
         (status) => {
           if (status === 'listening' && voiceActive) {
             if (label) label.textContent = 'LISTENING';
             agentBuf = '';
-            userBuf = '';
           } else if (status === 'speaking' && voiceActive) {
             if (label) label.textContent = 'SPEAKING';
-            userBuf = '';
           }
         },
         gps
