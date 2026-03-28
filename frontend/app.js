@@ -216,8 +216,6 @@ async function enterExploring() {
     disconnectWebSocket();
     transitionTo(State.IDLE);
   });
-<<<<<<< HEAD
-=======
 
   // Voice button — toggles real-time voice conversation via Gemini Live
   function deactivateVoice() {
@@ -305,7 +303,6 @@ async function enterExploring() {
   //   const icon = document.querySelector('#btn-cam .material-symbols-outlined');
   //   if (icon) icon.classList.toggle('filled');
   // });
->>>>>>> refs/remotes/origin/main
 }
 
 // ── Voice mode ────────────────────────────────────────────────
