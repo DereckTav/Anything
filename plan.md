@@ -1,4 +1,4 @@
-# CITYSCOPE — NYC Real-Time Site Analysis
+# URBANLENS — NYC Real-Time Site Analysis
 ## Implementation Plan
 
 ---
@@ -23,7 +23,7 @@
             [End] → [Synthesis Report]
 ```
 
-### How CITYSCOPE Uses Both Inputs
+### How URBANLENS Uses Both Inputs
 
 Every 2 seconds, a single Gemini call receives **two simultaneous inputs**:
 
@@ -107,6 +107,126 @@ This grounds every statement: no claim is made without either a visible fact or 
 
 ---
 
+## Configuration
+
+All tunable values live in exactly **two files**. Changing a value in one place affects the whole system — no hunting through code.
+
+### `frontend/config.js`
+
+Imported at the top of `app.js`, `camera.js`, `overlay.js`, and `audio.js`.
+
+```js
+const CONFIG = {
+  // --- Streaming ---
+  FRAME_INTERVAL_MS:    2000,   // How often to capture + send a frame. Lower = more responsive, higher cost.
+  JPEG_QUALITY:         0.6,    // 0.0–1.0. Lower = smaller payload, less detail for Gemini.
+  FRAME_MAX_WIDTH:      640,    // Resize frames to this width before encoding. Reduces payload size.
+
+  // --- GPS ---
+  GPS_POLL_INTERVAL_MS: 3000,   // How often to refresh GPS coords sent with each frame.
+  GPS_MAX_AGE_MS:       10000,  // Max age of a cached GPS reading before requesting a fresh one.
+
+  // --- AR Labels ---
+  AR_LABELS_ENABLED:    true,   // ← KILL SWITCH. Set false to disable all AR rendering instantly.
+  AR_LABEL_TTL_MS:      8000,   // How long a label stays on screen before fading out.
+  AR_LABEL_FADE_MS:     500,    // Duration of the fade-out animation.
+
+  // --- Audio ---
+  AUDIO_ENABLED:        true,   // Kill switch for TTS narration audio.
+  SPEECH_RATE:          1.0,    // Web Speech API rate. 0.5 = slow, 1.5 = fast.
+  SPEECH_PITCH:         1.0,    // Web Speech API pitch.
+
+  // --- WebSocket ---
+  WS_URL: "ws://localhost:8080/ws/analyze",  // Override with Cloud Run wss:// URL for prod.
+
+  // --- Subtitles ---
+  SUBTITLE_DISPLAY_MS:  6000,   // How long a subtitle stays visible before clearing.
+};
+```
+
+### `backend/config.py`
+
+Imported at the top of `main.py`, `agent.py`, and all tool files.
+
+```python
+# All tunable backend values in one place. Change here — nowhere else.
+
+# --- Streaming ---
+TOOL_TIMEOUT_S         = 5      # Max seconds to wait for any single NYC Open Data tool call.
+TOOLS_PARALLEL         = True   # Run all 5 tools concurrently (asyncio.gather). Set False to debug sequentially.
+
+# --- AR Labels ---
+AR_LABELS_ENABLED      = True   # Mirror of frontend flag. False = agent skips AR label generation (saves tokens).
+
+# --- Session ---
+MAX_STILLS_PER_SESSION = 12     # Cap on JPEG frames retained for the Synthesis Report.
+SESSION_TIMEOUT_S      = 3600   # Abandon session after 1 hour of inactivity.
+
+# --- Report ---
+REPORT_ID_PREFIX       = "CS"   # Report IDs: CS-0001, CS-0002, etc.
+PDF_MAX_STILLS         = 6      # Max stills included in the PDF export.
+
+# --- GPS ---
+GPS_REQUIRED           = True   # Master switch. If False, allows visual-only analysis (not recommended).
+```
+
+### Quick tuning reference
+
+| Symptom | What to change |
+|---------|---------------|
+| Narration feels too slow to update | Lower `FRAME_INTERVAL_MS` (try 1000) |
+| WebSocket payload too large | Lower `JPEG_QUALITY` (try 0.4) or `FRAME_MAX_WIDTH` (try 480) |
+| Tools timing out | Lower `TOOL_TIMEOUT_S` (try 3) |
+| AR labels disappear too fast | Raise `AR_LABEL_TTL_MS` (try 12000) |
+| Audio too fast / robotic | Adjust `SPEECH_RATE` (try 0.9) |
+| AR labels not ready for ship | Set `AR_LABELS_ENABLED: false` in both config files |
+
+---
+
+## AR Labels — Plug-In / Plug-Out
+
+AR labeling is **feature-flagged**. A single boolean in each config file disables the entire feature without touching anything else.
+
+**To kill AR labels entirely:**
+1. `frontend/config.js` → `AR_LABELS_ENABLED: false`
+2. `backend/config.py` → `AR_LABELS_ENABLED = False` *(optional — saves tokens)*
+
+Nothing else changes. No layout shifts. No broken UI. No other code to touch.
+
+### How it works
+
+**`overlay.js`** — first line of every function:
+```js
+export function renderARLabels(labels) {
+  if (!CONFIG.AR_LABELS_ENABLED) return;  // entire feature off
+  // ... rendering logic
+}
+```
+
+**`agent.py`** — system prompt built conditionally:
+```python
+from config import AR_LABELS_ENABLED
+
+AR_LABEL_INSTRUCTION = (
+  '4. Emit AR labels (JSON): {"source": "PLUTO", "text": "R7-2 Zoning", "position": "top-left"}'
+  if AR_LABELS_ENABLED else
+  '4. Do not emit AR labels.'
+)
+```
+
+**Impact table:**
+
+| Component | `true` | `false` |
+|-----------|--------|---------|
+| `overlay.js` | Renders chips + ar-lines | Returns immediately, canvas blank |
+| `camera.js` | Unchanged | Unchanged |
+| `app.js` | Unchanged | Unchanged |
+| Agent prompt bullet 4 | Full AR label schema instruction | "Do not emit AR labels." |
+| WebSocket `ar_labels` field | Array of label objects | Empty array `[]` |
+| HTML `<canvas>` | Present + drawn to | Present, never drawn to |
+
+---
+
 ## Design System
 
 Derived from the HTML mockups. All three screens share this exact system.
@@ -167,6 +287,7 @@ Active button: `text-[#D4C3A3] scale-110`. Inactive: `text-white/40 hover:text-w
 │   └── SKILL.md
 │
 ├── backend/
+│   ├── config.py                  ← ALL tunable backend params + AR kill switch (edit here first)
 │   ├── main.py                    ← FastAPI app, WebSocket endpoint
 │   ├── agent/
 │   │   ├── __init__.py
@@ -188,6 +309,7 @@ Active button: `text-[#D4C3A3] scale-110`. Inactive: `text-white/40 hover:text-w
 │   └── Dockerfile
 │
 ├── frontend/
+│   ├── config.js                  ← ALL tunable params + AR/audio kill switches (edit here first)
 │   ├── index.html                 ← entry point; loads app.js for state routing
 │   ├── screens/
 │   │   ├── active-analysis.html   ← live video + AR chips + subtitles + bottom nav
@@ -195,7 +317,7 @@ Active button: `text-[#D4C3A3] scale-110`. Inactive: `text-white/40 hover:text-w
 │   │   └── synthesis-report.html  ← timeline log + horizontal stills + verdict + PDF
 │   ├── app.js                     ← state machine: IDLE→ANALYZING→INSPECTING→REPORT
 │   ├── camera.js                  ← MediaStream, frame capture, GPS, WebSocket send
-│   ├── overlay.js                 ← Canvas AR label chips + ar-line connectors
+│   ├── overlay.js                 ← Canvas AR label chips + ar-line connectors (respects AR_LABELS_ENABLED)
 │   └── audio.js                   ← TTS audio chunk playback
 │   (No CSS files — Tailwind CDN + inline config handles all styling)
 │
@@ -215,17 +337,19 @@ from .tools import pluto, complaints, vision_zero, tree_census, geocoder, air_qu
 
 root_agent = LlmAgent(
     model="gemini-2.5-pro",
-    name="cityscope_agent",
+    name="urbanlens_agent",
     description="Real-time NYC urban site analyst with vision and voice",
-    instruction="""You are CITYSCOPE, an urban intelligence analyst.
+    instruction="""You are URBANLENS, an urban intelligence analyst.
 
 You receive a live video stream of NYC streets. As you observe each frame:
 1. Identify buildings, signage, block characteristics
 2. GPS coordinates are required. Always call tools to fetch PLUTO, 311, Vision Zero, and Tree Census data using the provided coordinates. If GPS is missing or unavailable, halt analysis and prompt the user to enable location before continuing.
 3. Synthesize what you SEE with what the DATA says into a spoken dialogue with the client — not a monologue. Ask them what aspects matter most to them (e.g., "Are you more concerned about the zoning limits or the neighborhood safety record?"), acknowledge their goals, and tailor what you highlight next based on their responses. The tone should feel like a knowledgeable friend walking the block with them, not a documentary voice-over.
-4. Emit structured AR labels (JSON) for buildings you identify, using this exact schema:
+4. [Conditional — included only when config.AR_LABELS_ENABLED = True]
+   Emit structured AR labels (JSON) for buildings you identify, using this exact schema:
    {"source": "PLUTO", "text": "R7-2 Zoning", "position": "top-left"}
    Valid sources: PLUTO, 311, PARKS, SAFETY, AQI. Valid positions: top-left, top-right, mid-left, mid-right, bottom-left, bottom-right.
+   [When AR_LABELS_ENABLED = False, this bullet is replaced with: "Do not emit AR labels."]
 5. Speak in a clear, warm, and engaging tone — like a knowledgeable friend, not a documentary narrator.
 6. Be grounded: only state facts from tools or clearly observed visuals. If tool data is unavailable or ambiguous, say so explicitly — and re-verify with the client before drawing conclusions (e.g., "The zoning record shows mixed-use but I want to confirm — are you looking at the residential or commercial portion of this lot?"). Never infer or fill in gaps silently.
 7. Keep narration to 2-3 sentences before pausing for new observations. This pacing rule is what creates conversational space — after each short narration chunk, listen for the client's response before continuing.
@@ -339,8 +463,8 @@ session_service = InMemorySessionService()
 @app.websocket("/ws/analyze")
 async def analyze(websocket: WebSocket):
     await websocket.accept()
-    session = session_service.create_session(app_name="cityscope", user_id="user")
-    runner = Runner(agent=root_agent, app_name="cityscope", session_service=session_service)
+    session = session_service.create_session(app_name="urbanlens", user_id="user")
+    runner = Runner(agent=root_agent, app_name="urbanlens", session_service=session_service)
 
     try:
         async for message in websocket.iter_json():
@@ -391,7 +515,7 @@ States: IDLE → ANALYZING → INSPECTING → REPORT
 **Layout layers (z-order):**
 1. `fixed inset-0 z-0` — `<video autoplay playsinline>` fills screen
 2. `absolute inset-0` — gradient overlay: `bg-gradient-to-b from-black/40 via-transparent to-black/60`
-3. `fixed top-0 z-50` — top bar: `close` icon + "CITYSCOPE" (left) | live LAT/LNG in `font-label text-[10px]` (right)
+3. `fixed top-0 z-50` — top bar: `close` icon + "URBANLENS" (left) | live LAT/LNG in `font-label text-[10px]` (right)
 4. `relative z-10 pointer-events-none` — AR label chips + subtitle text
 5. `fixed bottom-0 z-50` — bottom nav pill (see Design System)
 6. `fixed right-4 top-1/2 hidden md:flex` — desktop side HUD: "AI ACTIVE STREAM" `writing-mode: vertical-rl`
@@ -422,7 +546,7 @@ States: IDLE → ANALYZING → INSPECTING → REPORT
 
 **Layout:**
 - `fixed inset-0 z-0` — paused frame `<img>` with `grayscale-[0.4] contrast-125` + `bg-black/60` overlay
-- Top bar: "CITYSCOPE" (left) + `<button class="bg-primary px-4 py-2">▶ Resume</button>` (right)
+- Top bar: "URBANLENS" (left) + `<button class="bg-primary px-4 py-2">▶ Resume</button>` (right)
 - `pt-24 pb-32 px-6` scroll area with header + 4 cards
 - Decorative viewfinder brackets: `fixed top-1/2 left-6` and `right-6` — thin CSS border lines
 
@@ -445,7 +569,7 @@ GEO: 40.7128° N ...      ← font-label text-[10px] text-white/40
 ### Screen: Synthesis Report (`screens/synthesis-report.html`)
 
 **Layout:** `bg-background` (solid dark, no video)
-- Top bar: "CITYSCOPE" + `bg-primary "EXPORT PDF"` button with `picture_as_pdf` icon
+- Top bar: "URBANLENS" + `bg-primary "EXPORT PDF"` button with `picture_as_pdf` icon
 - Metadata block (`bg-surface-container p-5`): Report ID, Location, Date, Session Duration
 - `pt-24 pb-32 px-6 max-w-md mx-auto` scroll area
 
@@ -467,8 +591,9 @@ GEO: 40.7128° N ...      ← font-label text-[10px] text-white/40
 ### Camera & Frame Streaming (`camera.js`)
 
 - `getUserMedia({ video: { facingMode: "environment" } })` — rear camera on mobile
-- Capture frame: draw `<video>` to `<canvas>` → `canvas.toDataURL("image/jpeg", 0.6)` → strip prefix → send via WebSocket
-- Frame rate: 1 frame/2 seconds
+- Capture frame: draw `<video>` to `<canvas>` → `canvas.toDataURL("image/jpeg", CONFIG.JPEG_QUALITY)` → resize to `CONFIG.FRAME_MAX_WIDTH` → strip prefix → send via WebSocket
+- Frame rate: one frame every `CONFIG.FRAME_INTERVAL_MS` ms (default 2000)
+- GPS poll interval: `CONFIG.GPS_POLL_INTERVAL_MS` (default 3000), max cached age `CONFIG.GPS_MAX_AGE_MS`
 - GPS is **mandatory**: `navigator.geolocation.getCurrentPosition` required before first frame. If denied or unavailable, display blocking UI: "Location required — please enable GPS to continue." Do not send frames without GPS coords.
 
 ---
@@ -476,8 +601,8 @@ GEO: 40.7128° N ...      ← font-label text-[10px] text-white/40
 ## Data Flow Detail
 
 ```
-Every 2s:
-  Frontend captures frame (JPEG, ~30KB) + GPS coords
+Every CONFIG.FRAME_INTERVAL_MS (default 2000ms):
+  Frontend captures frame (JPEG at CONFIG.JPEG_QUALITY, max CONFIG.FRAME_MAX_WIDTH px) + GPS coords
   → WebSocket → FastAPI → ADK Runner
   → Gemini Live receives image + GPS context
   → GPS is required — if absent, backend sends "gps_required" event and halts
@@ -566,7 +691,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
 
 ### Deploy Command
 ```bash
-gcloud run deploy cityscope \
+gcloud run deploy urbanlens \
   --source ./backend \
   --region us-east1 \
   --allow-unauthenticated \
