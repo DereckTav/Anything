@@ -16,28 +16,28 @@ Check off items with `[x]` as they pass. Leave `[ ]` for anything that's failing
 
 Each tool can be tested in isolation. Run from the `backend/` directory with:
 ```bash
-python -c "from agent.tools.pluto import get_zoning_data; print(get_zoning_data('1000477501'))"
+python -c "from agent.tools.pluto import get_zoning_data; print(get_zoning_data('3002920001'))"
 ```
 
 ### PLUTO (`pluto.py`)
-- [ ] Known good BBL `1000477501` (Manhattan) → returns `zoning`, `far` (float), `address` (non-null)
+- [ ] Known good BBL `3002920001` (DUMBO, Brooklyn) → returns `zoning`, `far` (float), `address` (non-null)
 - [ ] Invalid BBL `0000000000` → returns `{"error": "..."}`, does NOT raise an exception
 - [ ] BBL with no data → returns `{"error": "No PLUTO data found..."}`, does NOT crash
 - [ ] Response time < 3 seconds
 
 ### 311 (`complaints.py`)
-- [ ] `lat=40.7580, lng=-73.9855` (Times Square) → returns list of complaints, each has `type` and `description`
+- [ ] `lat=40.7081, lng=-73.9571` (Williamsburg, Brooklyn) → returns list of complaints, each has `type` and `description`
 - [ ] Results are from last 90 days — spot-check `created_date` on at least 1 result
 - [ ] `lat=40.5000, lng=-74.5000` (ocean off NJ) → returns empty list, does NOT crash
 - [ ] Response time < 3 seconds
 
 ### Vision Zero (`vision_zero.py`)
-- [ ] `lat=40.7484, lng=-73.9967` (busy Midtown intersection) → returns `flood_risk` ("High Risk" or "Low Risk") and `emergency_response_min` (positive float)
+- [ ] `lat=40.6839, lng=-73.9773` (Atlantic Ave / 4th Ave, Brooklyn) → returns `flood_risk` ("High Risk" or "Low Risk") and `emergency_response_min` (positive float)
 - [ ] Low-traffic residential coords → returns zeroed/empty dict, does NOT crash or return negative numbers
 - [ ] Response time < 3 seconds
 
 ### Tree Census (`tree_census.py`)
-- [ ] `lat=40.7282, lng=-73.7949` (Queens residential street) → `canopy_pct` is int 0–100, at least 1 tree returned
+- [ ] `lat=40.6752, lng=-73.9685` (Prospect Heights, Brooklyn) → `canopy_pct` is int 0–100, at least 1 tree returned
 - [ ] Industrial zone coords → returns `{"street_trees": 0, ...}`, does NOT crash
 - [ ] Response time < 3 seconds
 
@@ -48,7 +48,7 @@ python -c "from agent.tools.pluto import get_zoning_data; print(get_zoning_data(
 - [ ] Response time < 5 seconds (AirNow can be slow)
 
 ### Geocoder (`geocoder.py`)
-- [ ] `lat=40.7484, lng=-73.9967` → returns a valid 10-digit BBL string (digits only, no spaces or dashes)
+- [ ] `lat=40.6839, lng=-73.9773` → returns a valid 10-digit BBL string (digits only, no spaces or dashes)
 - [ ] Coords outside NYC → returns `{"error": "Location outside NYC"}`, does NOT crash
 - [ ] Response time < 2 seconds
 
@@ -95,7 +95,7 @@ Connect locally: `wscat -c ws://localhost:8080/ws/analyze`
 
 ### `frame` message — happy path
 ```json
-{"type": "frame", "image_b64": "<valid_jpeg_b64>", "gps": {"lat": 40.7484, "lng": -73.9967}}
+{"type": "frame", "image_b64": "<valid_jpeg_b64>", "gps": {"lat": 40.6839, "lng": -73.9773}}
 ```
 - [ ] Response arrives within 10 seconds
 - [ ] Response has `type: "narration"`
@@ -454,10 +454,14 @@ Open each screen and verify by eye.
 
 ## 11. Quick Reference — Known Good Test Coordinates
 
+All test coordinates are within Brooklyn (borough 3).
+
 | Location | Lat | Lng | Expected interesting data |
 |----------|-----|-----|--------------------------|
-| Times Square | 40.7580 | -73.9855 | High 311 activity, commercial zoning |
-| Midtown intersection | 40.7484 | -73.9967 | Vision Zero crashes, dense PLUTO data |
-| Queens residential | 40.7282 | -73.7949 | Tree census data, R-zoning |
-| Empire State Building | 40.7484 | -73.9857 | C5 commercial zoning, high FAR |
+| Williamsburg | 40.7081 | -73.9571 | High 311 activity, mixed-use zoning |
+| Atlantic Ave / 4th Ave | 40.6839 | -73.9773 | Vision Zero crashes, dense PLUTO data |
+| Prospect Heights | 40.6752 | -73.9685 | Tree census data, R-zoning |
+| DUMBO | 40.7033 | -73.9888 | Commercial/loft zoning, high FAR |
 | Brooklyn Bridge Park | 40.6992 | -73.9979 | High canopy, low 311, park zoning |
+| Red Hook (waterfront) | 40.6740 | -74.0090 | High flood risk, industrial zoning |
+| Crown Heights | 40.6680 | -73.9442 | Residential zoning, street tree data |
