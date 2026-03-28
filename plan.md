@@ -1,88 +1,156 @@
-# URBANLENS — NYC Real-Time Site Analysis
+# WAYPOINT — Brooklyn Tourist Guide
 ## Implementation Plan
 
 ---
 
 ## Problem & Solution
 
-**Problem:** First-time homebuyers and real estate professionals lack quick, contextual insight into a neighborhood — currently requiring digging through disconnected municipal datasets (PLUTO, 311, tree census, crash data).
+**Problem:** First-time tourists in Brooklyn have no intelligent companion to help them explore. Google Maps tells you how to get somewhere, but not *what's worth going to* or *why* — and it doesn't talk back. Wandering is great, but tourists miss 80% of what makes a neighborhood interesting.
 
-**Solution:** A mobile web app where you point your phone's camera at any NYC block and an AI agent narrates what it sees — synthesizing live video with real NYC open data into a spoken, cinematic urban analysis. Like having a seasoned urban planner in your ear.
+**Solution:** A voice-first mobile web app that acts as a smart local guide. The tourist walks around Brooklyn, speaks naturally ("what's interesting around here?"), and an AI guide responds — describing nearby places, answering follow-up questions, and handing off to Google Maps when they're ready to navigate. The camera adds context so the guide understands what the tourist is already looking at.
 
 ---
 
 ## Core Flows
 
 ```
-[Camera JPEG frame + GPS] → [Gemini 2.5 Pro] ← [ADK Tools: PLUTO/311/VisionZero/Trees/AQI]
-                      ↓
-          [Spoken Narration + AR Labels + Subtitles]
-                      ↓
-            [Pause] → [Layer Inspector]
-                      ↓
-            [End] → [Synthesis Report]
+[Voice Input] → [Orchestrator Agent]
+                        ↓ immediately
+              [Quick Response Agent] → speaks within 0.5s
+                        ↓ in parallel (background)
+        ┌──────────────┬───────────────┬──────────────┐
+   [POI Agent]   [Vision Agent]  [Search Agent]  [Maps Agent]
+  (nearby POIs) (what's in      (details, hours, (distances,
+  from dataset)  camera frame)   context)         routes)
+        └──────────────┴───────────────┴──────────────┘
+                        ↓
+              [Synthesis] → streams updated speech to user
 ```
 
-### How URBANLENS Uses Both Inputs
+### How the Two Inputs Work Together
 
-Every 2 seconds, a single Gemini call receives **two simultaneous inputs**:
+| Input | Source | Purpose |
+|-------|--------|---------|
+| **Voice** | Microphone (Web Speech API or Gemini Live) | Tourist's questions + requests |
+| **Camera frame** | Periodic JPEG capture (every ~10s or on-demand) | Visual context — what the tourist is looking at right now |
+| **GPS** | `navigator.geolocation` | Location anchor for POI queries |
 
-| Input | Source | What it contains |
-|-------|--------|-----------------|
-| **Video frame** | Camera JPEG (640px, 60% quality) sent as image | Visual: buildings, signage, street conditions, scale, materials |
-| **Tool results** | NYC Open Data APIs via ADK tools | Facts: zoning district, FAR, 311 complaints, crash data, tree count, AQI |
-
-Gemini **synthesizes both** — cross-referencing what it sees with what the data says:
-- Spots scaffolding visually → 311 confirms active construction complaints → narrates the connection
-- Identifies a low-rise building → PLUTO shows 40% unused FAR → tells the client there's development upside
-- Sees a wide intersection → Vision Zero shows 3 crashes in 12 months → flags the safety concern
-
-This grounds every statement: no claim is made without either a visible fact or a real data point behind it.
-
-### Model Approach: Snapshot with `gemini-2.5-pro` (Approach A)
-
-| | Approach A — Snapshot ✓ | Approach B — Live Stream |
-|-|------------------------|--------------------------|
-| **Model** | `gemini-2.5-pro` | `gemini-2.0-flash-live-001` |
-| **Video** | JPEG frame every 2s as image input | Continuous WebSocket video stream |
-| **Pros** | Best reasoning, most reliable tool calls, simpler protocol | True real-time, built-in audio I/O |
-| **Cons** | Not true streaming | Less capable, more complex API |
-
-**We use Approach A.** The 2-second cadence feels live on mobile. Superior reasoning quality from 2.5-pro outweighs the streaming benefit, and tool calling is far more reliable. The WebSocket protocol is also simpler: send frame → get JSON response.
+The camera gives the agent *context*, not commands. If a tourist asks "what is this building?" the agent cross-references the Vision API result with nearby POIs to give a grounded answer — not a hallucination.
 
 ---
 
-### Three App States
-1. **Active Analysis** — Full-screen live `<video>`, gradient overlay, top bar with live GPS coords, canvas AR label chips anchored to buildings (`[PLUTO]`, `[311]`, `[PARKS]` prefixed), cinematic italic subtitles at bottom, floating bottom nav pill (Voice/Cam/Inspect/Stop), desktop-only side HUD ("AI ACTIVE STREAM")
-2. **Layer Inspector** — Grayscaled/darkened paused frame, "Intelligence Overlay" header with "Contextual Breakdown" title, Resume button, 4 stacked glassmorphic data cards (Zoning · Environment · Safety · 311 Activity), decorative viewfinder brackets on sides, bottom nav (Audio/Feed/Paused/Exit)
-3. **Synthesis Report** — Solid dark background, Report ID metadata block (Location/Date/Session Duration), timeline narrative log with timestamps, horizontal-scroll captured stills with category tags, Summary Verdict score block, PDF export button, bottom nav (Listen/Record/End/Discard)
+## Multi-Agent Architecture (Core Design Decision)
+
+This is the key architectural pattern: **two-phase speech with parallel background agents.**
+
+### Why Multi-Agent for Fast Speech?
+
+A single agent querying 3–4 APIs before speaking takes 3–5 seconds. That feels broken for a guide. The fix: separate *acknowledgment* from *enrichment*.
+
+```
+Phase 1 — Immediate (< 0.5s):
+  Quick Agent hears the user's intent and speaks a natural acknowledgment.
+  "Let me look around for you..."
+  "Good question — checking what's near you now..."
+
+Phase 2 — Enriched (1–4s later, streams in):
+  Background agents complete their tool calls.
+  Synthesis agent builds the full answer and speaks it, picking up from Phase 1.
+  "...there's the Jane's Carousel right by the waterfront, about 3 minutes south.
+   It's a 1922 antique carousel that got restored — really worth seeing up close."
+```
+
+The tourist hears a response in under a second. The full answer arrives as the agent "thinks aloud." This is how a real human guide talks.
+
+### Agent Roster
+
+| Agent | Model | Role | Tools |
+|-------|-------|------|-------|
+| **Orchestrator** | `gemini-2.5-flash` | Routes intent, manages conversation state | — |
+| **Quick Response** | `gemini-2.5-flash` | Immediate spoken acknowledgment | — |
+| **POI Agent** | `gemini-2.5-flash` | Finds nearby Points of Interest | `get_nearby_pois()` |
+| **Vision Agent** | `gemini-2.5-flash` | Analyzes camera frame for landmarks/context | `analyze_frame()` |
+| **Search Agent** | `gemini-2.5-flash` | Fetches rich details, hours, context | `google_search` (built-in ADK tool) |
+| **Maps Agent** | `gemini-2.5-flash` | Calculates distances, builds Maps handoff links | `get_distance()`, `build_maps_url()` |
+| **Synthesis Agent** | `gemini-2.5-pro` | Combines all results into final spoken response | — |
+
+> **Note on model choice:** All sub-agents use `gemini-2.5-flash` for speed. Only the final Synthesis uses `gemini-2.5-pro` for quality — it has all the data by then and just needs to tell a good story.
+
+### ADK Multi-Agent Wiring
+
+```python
+from google.adk.agents import LlmAgent
+
+poi_agent = LlmAgent(
+    model="gemini-2.5-flash",
+    name="poi_agent",
+    description="Finds Points of Interest near the user's GPS location",
+    tools=[get_nearby_pois]
+)
+
+vision_agent = LlmAgent(
+    model="gemini-2.5-flash",
+    name="vision_agent",
+    description="Analyzes what the tourist's camera sees using Google Vision",
+    tools=[analyze_frame]
+)
+
+search_agent = LlmAgent(
+    model="gemini-2.5-flash",
+    name="search_agent",
+    description="Searches the internet for details about a specific place",
+    tools=[google_search]
+)
+
+maps_agent = LlmAgent(
+    model="gemini-2.5-flash",
+    name="maps_agent",
+    description="Calculates walking distance and builds Google Maps navigation links",
+    tools=[get_distance, build_maps_url]
+)
+
+orchestrator = LlmAgent(
+    model="gemini-2.5-flash",
+    name="waypoint_orchestrator",
+    instruction="...",  # see prompts.py
+    sub_agents=[poi_agent, vision_agent, search_agent, maps_agent]
+)
+```
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Mobile Browser (PWA)                  │
-│  MediaStream → VideoCanvas → WebSocket Client            │
-│  AR Overlay (Canvas) + Subtitles + Audio playback        │
-└───────────────────┬─────────────────────────────────────┘
-                    │ WebSocket (video frames + GPS)
-┌───────────────────▼─────────────────────────────────────┐
-│              Cloud Run — FastAPI + ADK Agent             │
-│                                                          │
-│  WebSocket Handler                                       │
-│       ↓                                                  │
-│  ADK Orchestrator Agent (gemini-2.5-pro)                 │
-│       ↓ tools                                            │
-│  ┌──────┐ ┌──────┐ ┌─────────────┐ ┌──────┐ ┌───────┐  │
-│  │PLUTO │ │ 311  │ │ Vision Zero │ │Trees │ │  AQI  │  │
-│  │ Tool │ │ Tool │ │    Tool     │ │ Tool │ │ Tool  │  │
-│  └──┬───┘ └──┬───┘ └──────┬──────┘ └──┬───┘ └───┬───┘  │
-└───────┼──────────┼────────────┼───────────────┼─────────┘
-        └──────────┴────────────┴───────────────┘
-                         │
-         NYC Open Data (Socrata API) + AirNow API
+┌──────────────────────────────────────────────────────────────┐
+│                    Mobile Browser (PWA)                       │
+│                                                               │
+│  Microphone → Web Speech API (STT) → WebSocket               │
+│  Camera → periodic JPEG frame → WebSocket                     │
+│  GPS → navigator.geolocation → included in each request      │
+│                                                               │
+│  Speech output ← streaming TTS (Web Speech API)              │
+│  POI chips on screen ← rendered from agent response          │
+└───────────────────────┬──────────────────────────────────────┘
+                        │ WebSocket
+┌───────────────────────▼──────────────────────────────────────┐
+│              Cloud Run — FastAPI + ADK                        │
+│                                                               │
+│  WebSocket Handler                                            │
+│       ↓                                                       │
+│  Orchestrator Agent (gemini-2.5-flash)                        │
+│       ↓ routes to sub-agents in parallel                      │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐         │
+│  │   POI    │ │  Vision  │ │  Search  │ │  Maps    │         │
+│  │  Agent   │ │  Agent   │ │  Agent   │ │  Agent   │         │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘         │
+│       └────────────┴────────────┴────────────┘               │
+│                          ↓                                    │
+│              Synthesis Agent (gemini-2.5-pro)                 │
+└───────────────────────────────────────────────────────────────┘
+         │                    │                   │
+  NYC POI Dataset      Google Vision API    Google Search /
+  (Socrata API)        (landmark ID)        Google Maps API
 ```
 
 ---
@@ -91,187 +159,209 @@ This grounds every statement: no claim is made without either a visible fact or 
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| Frontend | Vanilla JS / PWA (no framework) | Fast load on mobile, no build step complexity |
-| Styling | Tailwind CSS CDN | No build step; config embedded in `<script>` per HTML file |
-| Camera | `navigator.mediaDevices.getUserMedia` | Native browser MediaStream |
-| AR Overlay | HTML5 Canvas | Draw label chips anchored to video coords |
-| Real-time comms | WebSocket | Low-latency bidirectional streaming |
-| Backend | Python FastAPI on Cloud Run | Handles WebSocket + ADK |
-| Agent | Google ADK `LlmAgent` | Orchestrates tools, manages session |
-| Vision + Analysis | Gemini 2.5 Pro (`gemini-2.5-pro`) | Snapshot approach: JPEG frame + tool results sent as multimodal input every 2s. Best reasoning + most reliable tool calling. |
-| Audio output | Web Speech API (`speechSynthesis`) | Browser TTS plays narration text. No separate audio model needed. |
-| Data APIs | NYC Open Data (Socrata) + AirNow API | PLUTO, 311, Vision Zero, Tree Census, AQI |
-| PDF Export | `reportlab` or `weasyprint` | Server-side PDF generation |
-| Hosting | Google Cloud Run | Mandatory, handles WebSocket |
-| Auth | None for MVP (public datasets need no key) | Simplify demo |
+| Frontend | Vanilla JS / PWA | Fast mobile load, no build step |
+| Styling | Tailwind CSS CDN | Same as before, works well |
+| Voice Input | Web Speech API `SpeechRecognition` | Native browser, no cost |
+| Camera | `getUserMedia` → periodic JPEG | Visual context only, not continuous |
+| Speech Output | Web Speech API `speechSynthesis` | Streaming-friendly, queues naturally |
+| Real-time comms | WebSocket | Low-latency, same as before |
+| Backend | Python FastAPI + Google ADK | Multi-agent orchestration |
+| Vision | Google Vision API (`LANDMARK_DETECTION`, `LABEL_DETECTION`) | Identifies what tourist is looking at |
+| Maps | Google Maps Platform (Directions API + Maps URLs) | Distances + deep-link handoff |
+| POI Data | NYC Open Data — Points of Interest dataset | Authoritative nearby location data |
+| Internet Search | ADK built-in `google_search` tool | POI details, hours, context, current info |
+| Hosting | Google Cloud Run | WebSocket support, HTTPS (required for mic/camera) |
+
+---
+
+## Data Sources
+
+### 1. NYC Points of Interest — Primary Location Data
+
+**Dataset:** `https://data.cityofnewyork.us/resource/rxuy-2muj.json`
+**Used for:** Geospatial query — "what POIs are within X meters of me?"
+**NOT used for:** Descriptions, hours, reviews (those come from Google Search)
+
+```python
+# Tool: get_nearby_pois(lat, lng, radius_meters=500)
+# Socrata geospatial query
+url = "https://data.cityofnewyork.us/resource/rxuy-2muj.json"
+params = {
+    "$where": f"within_circle(the_geom, {lat}, {lng}, {radius_meters})",
+    "$limit": 20,
+    "$select": "name, facility_t, address, the_geom"
+}
+# Returns: [{name, facility_type, address, lat, lng}]
+```
+
+**Why only this dataset:** We don't need zoning, 311, crash data, or air quality for tourists. We need *what is nearby and worth visiting*. The POI dataset gives us the location anchors; Google Search fills in the story.
+
+### 2. Google Vision API — Camera Context
+
+```python
+# Tool: analyze_frame(image_b64: str) -> dict
+# Sends camera JPEG to Vision API
+# Detects: LANDMARK_DETECTION, LABEL_DETECTION, TEXT_DETECTION
+# Returns: {landmarks: [{name, confidence}], labels: [...], text: [...]}
+```
+
+Used when: tourist asks "what is this?" or every ~30s passively to give the guide ambient context.
+
+### 3. Google Search (ADK built-in)
+
+```python
+from google.adk.tools import google_search
+
+# Search agent uses this to find:
+# - POI descriptions and history
+# - Opening hours
+# - "Worth visiting?" context
+# - Current events at a location
+```
+
+This is why we don't need RAG — the model searches live. The POI dataset gives us *what exists nearby*, Google Search gives us *why it matters*.
+
+### 4. Google Maps Platform
+
+```python
+# Tool: get_distance(origin_lat, origin_lng, dest_lat, dest_lng) -> dict
+# Uses Distance Matrix API
+# Returns: {walking_distance_m, walking_duration_min, walking_duration_text}
+
+# Tool: build_maps_url(dest_name, dest_lat, dest_lng) -> str
+# Builds a deep-link: https://www.google.com/maps/dir/?api=1&destination=...
+# Opens Google Maps with walking directions pre-loaded
+```
+
+No embedded map in the app. When a tourist says "take me there," the app opens Google Maps. This is better UX than a tiny embedded map.
+
+---
+
+## App Screens
+
+### Screen 1 — Explore (main screen)
+
+**What it looks like:**
+- Camera feed in background (subtle, darkened — visual context not the focus)
+- Large microphone button, center bottom — tap to speak
+- Status line at top: "Listening..." / "Looking around..." / "Found 4 places nearby"
+- 2–3 POI chips at bottom: `[CAROUSEL] Jane's Carousel · 3 min` with a tap target
+- Live GPS coords top-right (small, monospace)
+- Subtitles at bottom when agent is speaking
+
+**Interactions:**
+- Tap mic → speak → agent responds
+- Tap a POI chip → go to Place Detail screen
+- App proactively speaks when new POIs are detected nearby (every ~60s)
+
+### Screen 2 — Place Detail
+
+**What it looks like:**
+- POI name large, italic serif
+- Address + walking time (from Maps agent)
+- Agent-generated description (1–2 sentences from Search agent)
+- "Take me there" button → opens Google Maps deep-link
+- "Tell me more" button → agent speaks more detail
+- Back button → return to Explore
+
+### Screen 3 — Nearby (on demand)
+
+**What it looks like:**
+- Text list of nearby POIs (not a map — we're handing Maps off)
+- Each row: name, type (park / landmark / museum / etc.), distance
+- Tap any row → Place Detail
+
+---
+
+## WebSocket Message Protocol
+
+### Client → Server
+
+```json
+// User spoke
+{"type": "voice", "transcript": "what's around here?", "gps": {"lat": 40.7033, "lng": -73.9888}}
+
+// Camera frame (periodic, ~every 30s)
+{"type": "frame", "image_b64": "...", "gps": {"lat": 40.7033, "lng": -73.9888}}
+
+// User tapped a POI chip — wants more detail
+{"type": "poi_detail", "poi_name": "Jane's Carousel", "gps": {"lat": 40.7033, "lng": -73.9888}}
+```
+
+### Server → Client
+
+```json
+// Immediate acknowledgment (Phase 1, < 0.5s)
+{"type": "ack_speech", "text": "Let me look around you..."}
+
+// Full response (Phase 2, streams in)
+{"type": "response", "text": "There's Jane's Carousel...", "pois": [...], "maps_url": "..."}
+
+// POI chips to show on screen
+{"type": "poi_chips", "pois": [
+  {"name": "Jane's Carousel", "type": "landmark", "walk_min": 3, "lat": ..., "lng": ...},
+  {"name": "Brooklyn Bridge Park", "type": "park", "walk_min": 5, "lat": ..., "lng": ...}
+]}
+```
+
+---
+
+## ADK Tools Reference
+
+All tools live in `backend/agent/tools/`.
+
+| File | Function | API | Returns |
+|------|----------|-----|---------|
+| `poi.py` | `get_nearby_pois(lat, lng, radius_meters)` | NYC Socrata POI dataset | `[{name, type, address, lat, lng}]` |
+| `vision.py` | `analyze_frame(image_b64)` | Google Vision API | `{landmarks, labels, text}` |
+| `maps.py` | `get_distance(origin_lat, origin_lng, dest_lat, dest_lng)` | Google Maps Distance Matrix | `{distance_m, duration_min, duration_text}` |
+| `maps.py` | `build_maps_url(dest_name, dest_lat, dest_lng)` | Google Maps URL scheme | Deep-link string |
+
+Google Search is provided by ADK's built-in `google_search` tool — no custom tool needed.
 
 ---
 
 ## Configuration
 
-All tunable values live in exactly **two files**. Changing a value in one place affects the whole system — no hunting through code.
+### `backend/config.py`
+
+```python
+# POI Query
+POI_RADIUS_METERS       = 500    # How far to search. 500m ≈ 6 min walk.
+POI_MAX_RESULTS         = 20     # Max POIs returned per query.
+
+# Vision
+VISION_ENABLED          = True   # Kill switch. False = skip Vision API call.
+VISION_INTERVAL_S       = 30     # Passive frame analysis interval (seconds).
+
+# Speech
+PHASE1_MAX_TOKENS       = 30     # Quick agent: short acknowledgment only.
+PHASE2_MAX_TOKENS       = 200    # Synthesis agent: full response.
+
+# Maps
+MAPS_TRAVEL_MODE        = "walking"  # Always walking for tourists.
+
+# Tools
+TOOL_TIMEOUT_S          = 5     # Per-tool timeout.
+TOOLS_PARALLEL          = True  # Run POI + Vision + Search in parallel.
+
+# Session
+SESSION_TIMEOUT_S       = 7200  # 2 hours — tourist exploring for a day.
+```
 
 ### `frontend/config.js`
 
-Imported at the top of `app.js`, `camera.js`, `overlay.js`, and `audio.js`.
-
 ```js
 const CONFIG = {
-  // --- Streaming ---
-  FRAME_INTERVAL_MS:    2000,   // How often to capture + send a frame. Lower = more responsive, higher cost.
-  JPEG_QUALITY:         0.6,    // 0.0–1.0. Lower = smaller payload, less detail for Gemini.
-  FRAME_MAX_WIDTH:      640,    // Resize frames to this width before encoding. Reduces payload size.
-
-  // --- GPS ---
-  GPS_POLL_INTERVAL_MS: 3000,   // How often to refresh GPS coords sent with each frame.
-  GPS_MAX_AGE_MS:       10000,  // Max age of a cached GPS reading before requesting a fresh one.
-
-  // --- AR Labels ---
-  AR_LABELS_ENABLED:    true,   // ← KILL SWITCH. Set false to disable all AR rendering instantly.
-  AR_LABEL_TTL_MS:      8000,   // How long a label stays on screen before fading out.
-  AR_LABEL_FADE_MS:     500,    // Duration of the fade-out animation.
-
-  // --- Audio ---
-  AUDIO_ENABLED:        true,   // Kill switch for TTS narration audio.
-  SPEECH_RATE:          1.0,    // Web Speech API rate. 0.5 = slow, 1.5 = fast.
-  SPEECH_PITCH:         1.0,    // Web Speech API pitch.
-
-  // --- WebSocket ---
-  WS_URL: "ws://localhost:8080/ws/analyze",  // Override with Cloud Run wss:// URL for prod.
-
-  // --- Subtitles ---
-  SUBTITLE_DISPLAY_MS:  6000,   // How long a subtitle stays visible before clearing.
+  FRAME_INTERVAL_MS:      30000,  // Passive camera frame every 30s (context only)
+  GPS_POLL_INTERVAL_MS:   5000,   // GPS refresh every 5s (tourist is walking)
+  POI_CHIPS_MAX:          3,      // Max POI chips shown on screen at once
+  SPEECH_RATE:            0.95,   // Slightly slower than default — tourist-friendly pace
+  SPEECH_PITCH:           1.0,
+  WS_URL:                 `ws://${location.host}/ws/guide`,
+  AUTO_DISCOVER_INTERVAL_MS: 60000, // Proactively check for new POIs every 60s
 };
 ```
-
-### `backend/config.py`
-
-Imported at the top of `main.py`, `agent.py`, and all tool files.
-
-```python
-# All tunable backend values in one place. Change here — nowhere else.
-
-# --- Streaming ---
-TOOL_TIMEOUT_S         = 5      # Max seconds to wait for any single NYC Open Data tool call.
-TOOLS_PARALLEL         = True   # Run all 5 tools concurrently (asyncio.gather). Set False to debug sequentially.
-
-# --- AR Labels ---
-AR_LABELS_ENABLED      = True   # Mirror of frontend flag. False = agent skips AR label generation (saves tokens).
-
-# --- Session ---
-MAX_STILLS_PER_SESSION = 12     # Cap on JPEG frames retained for the Synthesis Report.
-SESSION_TIMEOUT_S      = 3600   # Abandon session after 1 hour of inactivity.
-
-# --- Report ---
-REPORT_ID_PREFIX       = "CS"   # Report IDs: CS-0001, CS-0002, etc.
-PDF_MAX_STILLS         = 6      # Max stills included in the PDF export.
-
-# --- GPS ---
-GPS_REQUIRED           = True   # Master switch. If False, allows visual-only analysis (not recommended).
-```
-
-### Quick tuning reference
-
-| Symptom | What to change |
-|---------|---------------|
-| Narration feels too slow to update | Lower `FRAME_INTERVAL_MS` (try 1000) |
-| WebSocket payload too large | Lower `JPEG_QUALITY` (try 0.4) or `FRAME_MAX_WIDTH` (try 480) |
-| Tools timing out | Lower `TOOL_TIMEOUT_S` (try 3) |
-| AR labels disappear too fast | Raise `AR_LABEL_TTL_MS` (try 12000) |
-| Audio too fast / robotic | Adjust `SPEECH_RATE` (try 0.9) |
-| AR labels not ready for ship | Set `AR_LABELS_ENABLED: false` in both config files |
-
----
-
-## AR Labels — Plug-In / Plug-Out
-
-AR labeling is **feature-flagged**. A single boolean in each config file disables the entire feature without touching anything else.
-
-**To kill AR labels entirely:**
-1. `frontend/config.js` → `AR_LABELS_ENABLED: false`
-2. `backend/config.py` → `AR_LABELS_ENABLED = False` *(optional — saves tokens)*
-
-Nothing else changes. No layout shifts. No broken UI. No other code to touch.
-
-### How it works
-
-**`overlay.js`** — first line of every function:
-```js
-export function renderARLabels(labels) {
-  if (!CONFIG.AR_LABELS_ENABLED) return;  // entire feature off
-  // ... rendering logic
-}
-```
-
-**`agent.py`** — system prompt built conditionally:
-```python
-from config import AR_LABELS_ENABLED
-
-AR_LABEL_INSTRUCTION = (
-  '4. Emit AR labels (JSON): {"source": "PLUTO", "text": "R7-2 Zoning", "position": "top-left"}'
-  if AR_LABELS_ENABLED else
-  '4. Do not emit AR labels.'
-)
-```
-
-**Impact table:**
-
-| Component | `true` | `false` |
-|-----------|--------|---------|
-| `overlay.js` | Renders chips + ar-lines | Returns immediately, canvas blank |
-| `camera.js` | Unchanged | Unchanged |
-| `app.js` | Unchanged | Unchanged |
-| Agent prompt bullet 4 | Full AR label schema instruction | "Do not emit AR labels." |
-| WebSocket `ar_labels` field | Array of label objects | Empty array `[]` |
-| HTML `<canvas>` | Present + drawn to | Present, never drawn to |
-
----
-
-## Design System
-
-Derived from the HTML mockups. All three screens share this exact system.
-
-### Fonts (Google Fonts CDN)
-| Tailwind class | Family | Usage |
-|----------------|--------|-------|
-| `font-headline` | Newsreader (italic) | Screen titles, subtitles, report headings, still captions |
-| `font-body` | Manrope | Body text, descriptions, nav labels |
-| `font-label` | Space Mono | Data values, GPS coords, `[SOURCE]` tags, timestamps, filenames |
-
-### Icons
-Material Symbols Outlined via Google Fonts CDN. Default: `wght 200, FILL 0`. Active state: `FILL 1`.
-Key icons: `close`, `mic`, `videocam`, `pause` (fill=1 when active), `cancel`, `play_arrow`, `layers`, `air`, `security`, `forum`, `location_on`, `picture_as_pdf`.
-
-### Key Color Tokens
-| Token | Hex | Usage |
-|-------|-----|-------|
-| `primary` | `#f1dfbe` | AR label borders, active nav, accent text, button bg |
-| `background` | `#121316` | App bg |
-| `surface-container` | `#1f1f23` | Cards, metadata blocks |
-| `on-surface` | `#e3e2e6` | Body text |
-| `on-surface-variant` | `#cec5b9` | Secondary text, subtitles |
-| `error` | `#ffb4ab` | Safety/flood risk indicators |
-| `on-primary` | `#392f18` | Text on primary-colored buttons |
-| `outline-variant` | `#4b463d` | Dividers, inactive timeline markers |
-
-### Glassmorphic Panel Recipe
-```css
-background: rgba(20, 22, 28, 0.65);
-backdrop-filter: blur(12px);
--webkit-backdrop-filter: blur(12px);
-```
-Applied via `.glass-panel` class or inline `bg-[#14161C]/65 backdrop-blur-custom`. Used for: bottom nav pill, AR label chips, Layer Inspector cards.
-
-### Shared Bottom Nav Pill
-Structure: `bg-[#14161C]/65 backdrop-blur-xl rounded-full px-8–10 py-4 flex gap-8–10`
-4 buttons per screen. Button anatomy: icon (`material-symbols-outlined text-2xl`) + label (`font-label text-[8–9px] uppercase tracking-tighter`).
-Active button: `text-[#D4C3A3] scale-110`. Inactive: `text-white/40 hover:text-white`.
-
-| Screen | Btn 1 | Btn 2 | Btn 3 *(active)* | Btn 4 |
-|--------|-------|-------|-----------------|-------|
-| Active Analysis | mic / VOICE | videocam / CAM | pause / **INSPECT** | cancel / STOP |
-| Layer Inspector | mic / AUDIO | videocam / FEED | pause / **PAUSED** | cancel / EXIT |
-| Synthesis Report | mic / LISTEN | videocam / RECORD | pause / **END** | cancel / DISCARD |
 
 ---
 
@@ -279,502 +369,80 @@ Active button: `text-[#D4C3A3] scale-110`. Inactive: `text-white/40 hover:text-w
 
 ```
 /
-├── plan.md                        ← this file
-├── .env                           ← GOOGLE_API_KEY, GCP project, etc.
-├── .claude-plugin/
-│   └── plugin.json
-├── skills/google-adk/
-│   └── SKILL.md
+├── plan.md                          ← this file
+├── test-plan.md
+├── workstreams.md
+├── .env
+├── skills/google-adk/SKILL.md
 │
 ├── backend/
-│   ├── config.py                  ← ALL tunable backend params + AR kill switch (edit here first)
-│   ├── main.py                    ← FastAPI app, WebSocket endpoint
+│   ├── config.py
+│   ├── main.py                      ← FastAPI + WebSocket at /ws/guide
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── agent.py               ← ADK LlmAgent definition
-│   │   ├── tools/
-│   │   │   ├── __init__.py
-│   │   │   ├── pluto.py           ← PLUTO zoning tool
-│   │   │   ├── complaints.py      ← 311 data tool
-│   │   │   ├── vision_zero.py     ← crash/safety tool
-│   │   │   ├── tree_census.py     ← canopy tool
-│   │   │   ├── air_quality.py     ← AQI tool (AirNow API)
-│   │   │   └── geocoder.py        ← lat/lng → address/block/BBL
-│   │   └── prompts.py             ← system prompt + narration style
-│   ├── report/
-│   │   ├── generator.py           ← PDF synthesis report builder
-│   │   └── templates/
-│   │       └── report.html        ← report template
+│   │   ├── agent.py                 ← Orchestrator + sub-agents defined here
+│   │   ├── prompts.py               ← All system prompts as constants
+│   │   └── tools/
+│   │       ├── __init__.py
+│   │       ├── poi.py               ← get_nearby_pois() → NYC POI dataset
+│   │       ├── vision.py            ← analyze_frame() → Google Vision API
+│   │       └── maps.py              ← get_distance() + build_maps_url()
 │   ├── requirements.txt
 │   └── Dockerfile
 │
 ├── frontend/
-│   ├── config.js                  ← ALL tunable params + AR/audio kill switches (edit here first)
-│   ├── index.html                 ← entry point; loads app.js for state routing
-│   ├── screens/
-│   │   ├── active-analysis.html   ← live video + AR chips + subtitles + bottom nav
-│   │   ├── layer-inspector.html   ← paused frame + 4 stacked glass cards + viewfinder
-│   │   └── synthesis-report.html  ← timeline log + horizontal stills + verdict + PDF
-│   ├── app.js                     ← state machine: IDLE→ANALYZING→INSPECTING→REPORT
-│   ├── camera.js                  ← MediaStream, frame capture, GPS, WebSocket send
-│   ├── overlay.js                 ← Canvas AR label chips + ar-line connectors (respects AR_LABELS_ENABLED)
-│   └── audio.js                   ← TTS audio chunk playback
-│   (No CSS files — Tailwind CDN + inline config handles all styling)
+│   ├── index.html                   ← Entry point, loads config + app
+│   ├── config.js                    ← All tunable frontend params
+│   ├── app.js                       ← State machine: IDLE → EXPLORING → DETAIL → NEARBY
+│   ├── voice.js                     ← SpeechRecognition (input) + speechSynthesis (output)
+│   ├── camera.js                    ← Periodic frame capture + GPS
+│   ├── manifest.json
+│   └── screens/
+│       ├── explore.html             ← Main screen: camera bg, mic button, POI chips
+│       ├── place-detail.html        ← POI name, description, "Take me there" button
+│       └── nearby.html              ← Text list of nearby POIs
 │
-├── cloudbuild.yaml                ← Cloud Build → Cloud Run deploy
-└── README.md
+└── cloudbuild.yaml
 ```
 
 ---
 
-## Backend Implementation
+## Workstream Split (4 People)
 
-### 1. ADK Agent (`backend/agent/agent.py`)
-
-```python
-from google.adk.agents import LlmAgent
-from .tools import pluto, complaints, vision_zero, tree_census, geocoder, air_quality
-
-root_agent = LlmAgent(
-    model="gemini-2.5-pro",
-    name="urbanlens_agent",
-    description="Real-time NYC urban site analyst with vision and voice",
-    instruction="""You are URBANLENS, an urban intelligence analyst.
-
-You receive a live video stream of NYC streets. As you observe each frame:
-1. Identify buildings, signage, block characteristics
-2. GPS coordinates are required. Always call tools to fetch PLUTO, 311, Vision Zero, and Tree Census data using the provided coordinates. If GPS is missing or unavailable, halt analysis and prompt the user to enable location before continuing.
-3. Synthesize what you SEE with what the DATA says into a spoken dialogue with the client — not a monologue. Ask them what aspects matter most to them (e.g., "Are you more concerned about the zoning limits or the neighborhood safety record?"), acknowledge their goals, and tailor what you highlight next based on their responses. The tone should feel like a knowledgeable friend walking the block with them, not a documentary voice-over.
-4. [Conditional — included only when config.AR_LABELS_ENABLED = True]
-   Emit structured AR labels (JSON) for buildings you identify, using this exact schema:
-   {"source": "PLUTO", "text": "R7-2 Zoning", "position": "top-left"}
-   Valid sources: PLUTO, 311, PARKS, SAFETY, AQI. Valid positions: top-left, top-right, mid-left, mid-right, bottom-left, bottom-right.
-   [When AR_LABELS_ENABLED = False, this bullet is replaced with: "Do not emit AR labels."]
-5. Speak in a clear, warm, and engaging tone — like a knowledgeable friend, not a documentary narrator.
-6. Be grounded: only state facts from tools or clearly observed visuals. If tool data is unavailable or ambiguous, say so explicitly — and re-verify with the client before drawing conclusions (e.g., "The zoning record shows mixed-use but I want to confirm — are you looking at the residential or commercial portion of this lot?"). Never infer or fill in gaps silently.
-7. Keep narration to 2-3 sentences before pausing for new observations. This pacing rule is what creates conversational space — after each short narration chunk, listen for the client's response before continuing.
-
-When the user pauses, emit a structured JSON summary for the Layer Inspector.
-When the user ends the session, call generate_synthesis to compile the report.""",
-    tools=[
-        geocoder.get_block_info,
-        pluto.get_zoning_data,
-        complaints.get_311_complaints,
-        vision_zero.get_safety_data,
-        tree_census.get_canopy_data,
-        air_quality.get_air_quality,
-    ]
-)
-```
-
-### 2. ADK Tools (NYC Open Data via Socrata)
-
-Each tool follows this pattern — Socrata base URL + SoQL query:
-
-**PLUTO (`pluto.py`)**
-```python
-import httpx
-
-PLUTO_URL = "https://data.cityofnewyork.us/resource/64uk-42ks.json"
-
-def get_zoning_data(bbl: str) -> dict:
-    """Get PLUTO zoning, FAR, lot area, year built for a tax lot.
-    Args:
-        bbl: NYC Borough-Block-Lot identifier (10 digits)
-    Returns: dict with zonedist1, far, lotarea, yearbuilt, landuse
-    """
-    params = {"bbl": bbl, "$limit": 1}
-    r = httpx.get(PLUTO_URL, params=params, timeout=5)
-    data = r.json()
-    if not data:
-        return {"error": "No PLUTO data found for this location"}
-    return {
-        "zoning": data[0].get("zonedist1"),
-        "far": data[0].get("far"),
-        "lot_area_sqft": data[0].get("lotarea"),
-        "year_built": data[0].get("yearbuilt"),
-        "land_use": data[0].get("landuse"),
-        "address": data[0].get("address"),
-    }
-```
-
-**311 (`complaints.py`)**
-```python
-COMPLAINTS_URL = "https://data.cityofnewyork.us/resource/erm2-nwe9.json"
-
-def get_311_complaints(lat: float, lng: float, radius_meters: int = 200) -> dict:
-    """Get recent 311 complaints near a location (last 90 days).
-    Args:
-        lat: Latitude
-        lng: Longitude
-        radius_meters: Search radius
-    Returns: dict with complaint counts by type and top complaints
-    """
-    # Socrata geospatial query
-    query = f"within_circle(location, {lat}, {lng}, {radius_meters})"
-    params = {
-        "$where": query,
-        "$limit": 50,
-        "$order": "created_date DESC",
-    }
-    ...
-```
-
-**Vision Zero (`vision_zero.py`)**
-```python
-CRASHES_URL = "https://data.cityofnewyork.us/resource/h9gi-nx95.json"
-
-def get_safety_data(lat: float, lng: float) -> dict:
-    """Get traffic crashes and pedestrian safety near a location (last 12 months).
-    Args:
-        lat: Latitude
-        lng: Longitude
-    Returns: dict with crash count, injury count, pedestrian incidents
-    """
-    ...
-```
-
-**Tree Census (`tree_census.py`)**
-```python
-TREES_URL = "https://data.cityofnewyork.us/resource/uvpi-gqnh.json"
-
-def get_canopy_data(lat: float, lng: float) -> dict:
-    """Get street tree data near a location.
-    Args:
-        lat: Latitude
-        lng: Longitude
-    Returns: dict with tree count, species diversity, health distribution
-    """
-    ...
-```
-
-### 3. WebSocket Handler (`main.py`)
-
-```python
-from fastapi import FastAPI, WebSocket
-import asyncio, json, base64
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from agent.agent import root_agent
-
-app = FastAPI()
-session_service = InMemorySessionService()
-
-@app.websocket("/ws/analyze")
-async def analyze(websocket: WebSocket):
-    await websocket.accept()
-    session = session_service.create_session(app_name="urbanlens", user_id="user")
-    runner = Runner(agent=root_agent, app_name="urbanlens", session_service=session_service)
-
-    try:
-        async for message in websocket.iter_json():
-            msg_type = message.get("type")
-
-            if msg_type == "frame":
-                # message: {type: "frame", image_b64: "...", gps: {lat, lng}}
-                response = await runner.run_async(
-                    user_id="user",
-                    session_id=session.id,
-                    new_message=build_multimodal_message(message)
-                )
-                for event in response:
-                    if event.is_final_response():
-                        await websocket.send_json({
-                            "type": "narration",
-                            "text": event.content.parts[0].text,
-                            "ar_labels": extract_ar_labels(event),
-                        })
-
-            elif msg_type == "pause":
-                # Return structured layer data
-                layer_data = await get_layer_summary(runner, session)
-                await websocket.send_json({"type": "layer_data", **layer_data})
-
-            elif msg_type == "end":
-                report = await generate_report(runner, session)
-                await websocket.send_json({"type": "report", **report})
-
-    except Exception as e:
-        await websocket.send_json({"type": "error", "message": str(e)})
-```
+| Person | Scope |
+|--------|-------|
+| **1 — Backend Core** | `main.py` WebSocket handler, ADK orchestrator agent, `poi.py` tool, `maps.py` tool |
+| **2 — Frontend Core** | `app.js` state machine, `voice.js` (STT + TTS), `camera.js`, all 3 screen HTML shells |
+| **3 — Vision + Search** | `vision.py` tool, Search agent wiring, POI chip UI rendering, speech streaming glue |
+| **4 — Multi-Agent + Deploy** | Sub-agent definitions in `agent.py`, parallel tool execution pattern, `cloudbuild.yaml`, Cloud Run deployment |
 
 ---
 
-## Frontend Implementation
+## What Changed From the Previous Plan
 
-### State Machine (`app.js`)
-
-```
-States: IDLE → ANALYZING → INSPECTING → REPORT
-                 ↑              ↓
-                 └──────────────┘ (resume)
-```
-
-### Screen: Active Analysis (`screens/active-analysis.html`)
-
-**Layout layers (z-order):**
-1. `fixed inset-0 z-0` — `<video autoplay playsinline>` fills screen
-2. `absolute inset-0` — gradient overlay: `bg-gradient-to-b from-black/40 via-transparent to-black/60`
-3. `fixed top-0 z-50` — top bar: `close` icon + "URBANLENS" (left) | live LAT/LNG in `font-label text-[10px]` (right)
-4. `relative z-10 pointer-events-none` — AR label chips + subtitle text
-5. `fixed bottom-0 z-50` — bottom nav pill (see Design System)
-6. `fixed right-4 top-1/2 hidden md:flex` — desktop side HUD: "AI ACTIVE STREAM" `writing-mode: vertical-rl`
-
-**AR label chips** (each absolutely positioned):
-```html
-<div class="bg-[#14161C]/65 backdrop-blur-custom px-3 py-1.5 border-l-2 border-[#D4C3A3]">
-  <span class="font-label text-[10px] text-primary uppercase">[SOURCE]</span>
-  <span class="font-body text-sm text-white ml-2">Label text</span>
-</div>
-<div class="ar-line ..."></div>  <!-- connector line -->
-```
-`.ar-line`: `background: linear-gradient(to right, rgba(212,195,163,0.8), transparent); height:1px; width:60px;`
-
-**Subtitles:** `absolute bottom-32 px-8 text-center` → `font-headline italic text-lg md:text-xl text-white text-shadow-strong leading-relaxed`
-
-**AR label backend JSON:**
-```json
-[
-  {"source": "PLUTO", "text": "R7-2 Zoning",      "position": "top-left"},
-  {"source": "311",   "text": "3x Noise Density",  "position": "mid-right"},
-  {"source": "PARKS", "text": "8% Canopy",         "position": "bottom-left"}
-]
-```
-`overlay.js` maps `position` to predefined `top/left` percentage coords on the screen.
-
-### Screen: Layer Inspector (`screens/layer-inspector.html`)
-
-**Layout:**
-- `fixed inset-0 z-0` — paused frame `<img>` with `grayscale-[0.4] contrast-125` + `bg-black/60` overlay
-- Top bar: "URBANLENS" (left) + `<button class="bg-primary px-4 py-2">▶ Resume</button>` (right)
-- `pt-24 pb-32 px-6` scroll area with header + 4 cards
-- Decorative viewfinder brackets: `fixed top-1/2 left-6` and `right-6` — thin CSS border lines
-
-**Header:**
-```
-"Intelligence Overlay"   ← font-label text-[10px] uppercase tracking-[0.3em] text-primary/60
-"Contextual Breakdown"   ← font-headline italic text-4xl text-primary
-GEO: 40.7128° N ...      ← font-label text-[10px] text-white/40
-```
-
-**4 Glass Cards** (`glass-panel p-6 border-l-2 border-primary/20`):
-
-| Card | Icon | Data |
-|------|------|------|
-| **Zoning** | `layers` | District (e.g. R7A), Density Index (FAR), italic agent description |
-| **Environment** | `air` | Canopy Cover % + canopy progress bar, AQI int + category ("Good"/"Moderate"/"Poor") |
-| **Safety** | `security` (`text-error/60`) | Flood Vulnerability (text-error if High Risk), Emergency Response time (min) |
-| **311 Activity** | `forum` | List of complaint entries: `w-1 bg-primary/40` left bar + type label + description text |
-
-### Screen: Synthesis Report (`screens/synthesis-report.html`)
-
-**Layout:** `bg-background` (solid dark, no video)
-- Top bar: "URBANLENS" + `bg-primary "EXPORT PDF"` button with `picture_as_pdf` icon
-- Metadata block (`bg-surface-container p-5`): Report ID, Location, Date, Session Duration
-- `pt-24 pb-32 px-6 max-w-md mx-auto` scroll area
-
-**Section 1 — Narrative Log (timeline):**
-- Vertical line: `before:` pseudo-element, `left-[11px] w-[1px] bg-outline-variant/20`
-- Each entry: `pl-8 relative` with circular marker div (active = `border-primary`, past = `border-outline-variant/40`), timestamp `font-label text-[10px] text-primary/70`, narration text with highlights in `text-primary font-medium`
-
-**Section 2 — Captured Stills (horizontal scroll):**
-- `flex overflow-x-auto gap-4 no-scrollbar -mx-6 px-6 pb-4` (bleeds to screen edge)
-- Each card `min-w-[280px] bg-surface-container`: image `h-48` with gradient overlay + tag chips (`font-label text-[8px]`) + filename (`font-label text-[10px]`) + italic caption (`font-headline text-xs`)
-- Tag colors: `bg-primary/20 border-primary/30 text-primary` for data, `bg-error/20 border-error/30 text-error` for alerts
-
-**Section 3 — Summary Verdict:**
-- `bg-primary-container/10 border border-primary/10 p-6`
-- `font-headline italic text-xl text-primary` + body text with score in `text-primary font-bold`
-
-**PDF export:** `GET /report/{session_id}/pdf` → binary download. Frontend: `window.location.href = url`.
-
-### Camera & Frame Streaming (`camera.js`)
-
-- `getUserMedia({ video: { facingMode: "environment" } })` — rear camera on mobile
-- Capture frame: draw `<video>` to `<canvas>` → `canvas.toDataURL("image/jpeg", CONFIG.JPEG_QUALITY)` → resize to `CONFIG.FRAME_MAX_WIDTH` → strip prefix → send via WebSocket
-- Frame rate: one frame every `CONFIG.FRAME_INTERVAL_MS` ms (default 2000)
-- GPS poll interval: `CONFIG.GPS_POLL_INTERVAL_MS` (default 3000), max cached age `CONFIG.GPS_MAX_AGE_MS`
-- GPS is **mandatory**: `navigator.geolocation.getCurrentPosition` required before first frame. If denied or unavailable, display blocking UI: "Location required — please enable GPS to continue." Do not send frames without GPS coords.
+| Old (URBANLENS) | New (WAYPOINT) |
+|-----------------|----------------|
+| Building analysis for homebuyers/developers | Exploration guide for first-time tourists |
+| Camera is primary input (analyzed every 2s) | Camera is background context (every 30s) |
+| Voice is output only | Voice is primary I/O (voice-first) |
+| 5 data tools: PLUTO, 311, Vision Zero, Trees, AQI | 3 data tools: POI dataset, Vision API, Maps API |
+| RAG-style municipal data synthesis | Live Google Search for richness, no RAG |
+| Single Gemini agent | Multi-agent: Quick + POI + Vision + Search + Maps + Synthesis |
+| Single agent responds after all tools finish | Two-phase speech: acknowledge immediately, enrich as data arrives |
+| Layer Inspector + Synthesis Report screens | Place Detail + Nearby List screens |
+| No navigation handoff | "Take me there" → Google Maps deep-link |
+| All of NYC | Brooklyn only (can expand city-agnostically later) |
 
 ---
 
-## Data Flow Detail
+## Open Questions (Decide Before Building)
 
-```
-Every CONFIG.FRAME_INTERVAL_MS (default 2000ms):
-  Frontend captures frame (JPEG at CONFIG.JPEG_QUALITY, max CONFIG.FRAME_MAX_WIDTH px) + GPS coords
-  → WebSocket → FastAPI → ADK Runner
-  → Gemini Live receives image + GPS context
-  → GPS is required — if absent, backend sends "gps_required" event and halts
-  → Agent calls all 4 data tools using GPS coordinates
-  → Tools fetch NYC Open Data (parallel async calls)
-  → Gemini synthesizes visual + data → narration text + AR label JSON
-  → WebSocket → Frontend
-  → Audio: Web Speech API TTS (or Gemini Live audio output if available)
-  → Canvas: render AR labels
-  → Subtitle bar: animate text
-```
+1. **Voice activation:** Push-to-talk (tap mic button) or always-on wake word? Push-to-talk is simpler and avoids false triggers in a noisy city.
 
----
+2. **Proactive narration:** Should the app *spontaneously* say "Hey, there's something interesting nearby" without the user asking? Or only respond to explicit questions? (Recommendation: opt-in toggle.)
 
-## Layer Inspector Data Structure
+3. **POI filtering:** The dataset includes all facility types. Should we filter to tourist-relevant types only (landmarks, parks, museums, cultural) or show everything?
 
-Emitted by backend on `pause` event. Maps directly to the 4 glass card UI:
+4. **Offline fallback:** Tourist in a tunnel? Should the last-known POIs stay on screen, or show "no connection" state?
 
-```json
-{
-  "zoning": {
-    "district": "R7A",
-    "far": 4.0,
-    "description": "High-density residential with mandatory inclusionary housing requirements active in this sector."
-  },
-  "environment": {
-    "canopy_pct": 18,
-    "aqi": 42,
-    "aqi_category": "Good"
-  },
-  "safety": {
-    "flood_risk": "High Risk",
-    "emergency_response_min": 4.2
-  },
-  "activity_311": {
-    "complaints": [
-      {"type": "NOISE COMPLAINT", "description": "Construction outside of permitted hours at 144 Bowery."},
-      {"type": "STREET LIGHT",    "description": "Infrastructure failure reported at intersection. Ticket #992-B."}
-    ]
-  }
-}
-```
-
----
-
-## Synthesis Report
-
-Backend builds from accumulated session data (narration chunks, frame stills, tool results).
-
-**Structure:**
-1. **Metadata** — Report ID (`CS-XXXX`), Location address, Date, Session Duration
-2. **Narrative Log** — Timeline of timestamped narration entries; key terms highlighted
-3. **Captured Stills** — JPEG frames captured at pause points; tagged by data category
-4. **Summary Verdict** — AI-generated score (X/10) + paragraph verdict
-5. *(PDF includes all of the above in printable layout)*
-
-**Export:** `GET /report/{session_id}/pdf` → server generates via `reportlab`; frontend triggers browser download.
-
----
-
-## Deployment
-
-### Dockerfile (`backend/Dockerfile`)
-```dockerfile
-FROM python:3.12-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
-```
-
-### Cloud Run Config
-- **Min instances:** 1 (cold start kills WebSocket UX)
-- **Max instances:** 10
-- **Memory:** 512MB
-- **Concurrency:** 80
-- **Region:** us-east1 (closest to NYC for data latency)
-- **WebSocket:** Cloud Run supports WebSocket natively — no special config
-
-### Secrets (Cloud Secret Manager)
-- `GOOGLE_API_KEY` or use Workload Identity for Vertex AI
-- `GOOGLE_CLOUD_PROJECT`
-- `GOOGLE_CLOUD_LOCATION`
-- `AIRNOW_API_KEY` — for AQI tool (free registration at airnow.gov)
-
-### Deploy Command
-```bash
-gcloud run deploy urbanlens \
-  --source ./backend \
-  --region us-east1 \
-  --allow-unauthenticated \
-  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT
-```
-
----
-
-## Implementation Order
-
-### Phase 1 — Skeleton (get video → get any AI response)
-- [ ] FastAPI app with `/ws/analyze` WebSocket endpoint
-- [ ] Frontend: camera stream + frame capture + WebSocket send
-- [ ] ADK agent returns basic text response to a frame
-- [ ] Frontend displays text as subtitle
-
-### Phase 2 — Data Tools
-- [ ] Implement all 5 tools: PLUTO, 311, VisionZero, Trees, AQI (AirNow)
-- [ ] Geocoder tool: lat/lng → BBL for PLUTO lookups
-- [ ] Agent prompt enforces GPS as mandatory; tools always called with coordinates
-- [ ] Test tool responses independently
-
-### Phase 3 — AR + Audio
-- [ ] AR label JSON schema (`source`/`text`/`position`) defined + agent emits it
-- [ ] `overlay.js` renders label chips with `[SOURCE]` prefix + ar-line connectors
-- [ ] Audio: Web Speech API TTS from narration text
-- [ ] Subtitle animation: `font-headline italic` reveal at `bottom-32`
-
-### Phase 4 — Layer Inspector
-- [ ] Pause button: captures still, sends "pause" WebSocket message
-- [ ] Backend returns 4-card layer JSON (zoning/environment/safety/activity_311)
-- [ ] `layer-inspector.html` renders glass cards with correct icons + data fields
-- [ ] Viewfinder brackets + grayscale overlay on paused frame
-
-### Phase 5 — Synthesis Report
-- [ ] Session accumulates: narration chunks (with timestamps), captured stills (JPEG), tool results
-- [ ] PDF generator builds: metadata + timeline log + stills + verdict
-- [ ] `synthesis-report.html`: timeline markup + horizontal scroll stills + summary verdict block
-- [ ] Export via `GET /report/{session_id}/pdf` → browser download
-
-### Phase 6 — Deploy
-- [ ] Dockerfile + Cloud Build
-- [ ] Deploy to Cloud Run (us-east1)
-- [ ] Test on actual mobile device at a NYC block
-- [ ] HTTPS required for `getUserMedia` — Cloud Run provides this automatically
-
----
-
-## Key Risks & Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Gemini Live latency makes narration feel laggy | Buffer 2-3 sentences; start speaking while next frame processes |
-| GPS unavailable / denied | Block analysis entirely. Display: "Location required — please enable GPS to continue." No fallback to visual-only. |
-| 311/PLUTO API rate limits or downtime | Cache results per BBL for session duration; graceful "data unavailable" messages |
-| Frame size too large → WebSocket slowdown | JPEG at 60% quality, resize to 640px wide before sending |
-| Gemini hallucinates building details | System prompt: "only state what tools confirm or what is visually evident" |
-| Cold start on Cloud Run breaks first WebSocket | Set min-instances=1 |
-| `getUserMedia` denied on mobile | Graceful permission prompt UI with explanation of why camera is needed |
-
----
-
-## Scoring Alignment
-
-| Criterion | How We Hit It |
-|-----------|--------------|
-| Beyond Text (40%) | Live video + spoken narration + AR labels + glassmorphic UI — no text box anywhere |
-| Fluidity (40%) | Streaming WebSocket, continuous narration, frame-by-frame analysis — not turn-based |
-| Google Cloud Native (30%) | ADK `LlmAgent`, Gemini 2.5 Pro, Cloud Run, Cloud Secret Manager |
-| Grounding / No Hallucinations (30%) | All claims backed by NYC Open Data tool calls; explicit fallback language |
-| Working Demo (30%) | Real camera → real NYC data → real narration; film at an actual NYC block |
-
----
-
-## NYC Open Data API Reference
-
-| Dataset | Endpoint | Key Fields |
-|---------|----------|------------|
-| PLUTO | Socrata `64uk-42ks` | bbl, zonedist1, far, lotarea, yearbuilt |
-| 311 | Socrata `erm2-nwe9` | complaint_type, location, created_date |
-| Vision Zero Crashes | Socrata `h9gi-nx95` | latitude, longitude, number_of_persons_injured |
-| Tree Census 2015 | Socrata `uvpi-gqnh` | latitude, longitude, spc_common, health |
-| AQI (Air Quality) | AirNow API | `https://www.airnowapi.org/aq/observation/latLong/current/` → AQI int + category |
-
-NYC Open Data base URL: `https://data.cityofnewyork.us/resource/{id}.json`
-No key required for Socrata (1000 req/hr per IP). AirNow requires free API key from airnow.gov.
+5. **Language:** English only for MVP, or is multi-language TTS a priority?
