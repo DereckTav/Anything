@@ -1,4 +1,4 @@
-"""Real-time voice conversation endpoint using Gemini Live API."""
+"""Real-time voice conversation endpoint using Gemini Live API — WAYPOINT tourist guide."""
 
 import asyncio
 import json
@@ -9,105 +9,95 @@ from google import genai
 from google.genai import types
 
 from config import GOOGLE_API_KEY
-from agent.tools.geocoder import get_block_info
-from agent.tools.pluto import get_zoning_data
-from agent.tools.complaints import get_311_complaints
-from agent.tools.vision_zero import get_safety_data
-from agent.tools.tree_census import get_canopy_data
-from agent.tools.air_quality import get_air_quality
-VOICE_SYSTEM_PROMPT = """You are URBANLENS, a friendly urban intelligence assistant having a real-time voice conversation. You are embedded in a mobile AR app exploring NYC streets.
+from agent.tools.poi import get_nearby_pois
+from agent.tools.vision import analyze_frame
+from agent.tools.maps import get_distance, build_maps_url
+
+VOICE_SYSTEM_PROMPT = """You are WAYPOINT, a friendly local guide helping first-time tourists explore Brooklyn, NYC.
+You are having a real-time voice conversation. The tourist is walking around Brooklyn right now.
 
 RULES:
-1. Be conversational and natural. Respond to greetings, questions, small talk — anything the user says.
-2. Keep responses SHORT — 1-2 sentences. This is a spoken conversation.
-3. You have tools to look up NYC data (zoning, 311 complaints, safety, trees, air quality). Only use them when the user asks about something specific.
-4. If the user sends camera frames, you can comment on what you see — but only if relevant to the conversation.
-5. Never say "As an AI" or give disclaimers. Talk like a knowledgeable friend.
-6. If the user says hi, say hi back. If they ask about the weather, chat about it. Be human.
+1. Be warm, conversational, and enthusiastic. Sound like a friend who knows Brooklyn well.
+2. Keep responses SHORT — 1-3 sentences max. This is spoken audio, not text.
+3. You have tools to find nearby places, identify what the camera sees, and get walking directions.
+   Use them when the tourist asks something specific. Don't call tools on every turn.
+4. When you mention specific places, give a one-sentence reason why they're worth visiting.
+5. Never say "As an AI" — just talk naturally.
+6. When the tourist seems done with a topic, ask a follow-up question to keep exploring.
+
+TOOL USAGE:
+- get_nearby_pois: when tourist asks what's nearby or what to see
+- analyze_frame: when tourist asks what something is or you want visual context
+- get_distance: when tourist asks how far something is
+- build_maps_url: when tourist wants directions to a specific place
 """
 
 # Tool registry for Live API tool calls
 TOOL_FUNCTIONS = {
-    "get_block_info": get_block_info,
-    "get_zoning_data": get_zoning_data,
-    "get_311_complaints": get_311_complaints,
-    "get_safety_data": get_safety_data,
-    "get_canopy_data": get_canopy_data,
-    "get_air_quality": get_air_quality,
+    "get_nearby_pois": get_nearby_pois,
+    "analyze_frame": analyze_frame,
+    "get_distance": get_distance,
+    "build_maps_url": build_maps_url,
 }
 
-# Tool declarations for Gemini
+# Tool declarations for Gemini Live API
 TOOL_DECLARATIONS = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
-            name="get_block_info",
-            description="Convert lat/lng to NYC block info (BBL, address, borough)",
+            name="get_nearby_pois",
+            description="Find Points of Interest near the tourist's GPS location in Brooklyn",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
-                    "lat": types.Schema(type="NUMBER", description="Latitude"),
-                    "lng": types.Schema(type="NUMBER", description="Longitude"),
+                    "lat": types.Schema(type="NUMBER", description="Tourist's current latitude"),
+                    "lng": types.Schema(type="NUMBER", description="Tourist's current longitude"),
+                    "radius_meters": types.Schema(
+                        type="INTEGER",
+                        description="Search radius in meters (default 500)",
+                    ),
                 },
                 required=["lat", "lng"],
             ),
         ),
         types.FunctionDeclaration(
-            name="get_zoning_data",
-            description="Get PLUTO zoning, FAR, lot area for a NYC tax lot by BBL",
+            name="analyze_frame",
+            description="Analyze a camera frame to identify landmarks, objects, and text visible to the tourist",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
-                    "bbl": types.Schema(type="STRING", description="10-digit BBL"),
+                    "image_b64": types.Schema(
+                        type="STRING",
+                        description="Base64-encoded JPEG image from the tourist's camera",
+                    ),
                 },
-                required=["bbl"],
+                required=["image_b64"],
             ),
         ),
         types.FunctionDeclaration(
-            name="get_311_complaints",
-            description="Get recent 311 complaints near a location",
+            name="get_distance",
+            description="Get walking distance and time from the tourist to a destination",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
-                    "lat": types.Schema(type="NUMBER", description="Latitude"),
-                    "lng": types.Schema(type="NUMBER", description="Longitude"),
+                    "origin_lat": types.Schema(type="NUMBER", description="Tourist's current latitude"),
+                    "origin_lng": types.Schema(type="NUMBER", description="Tourist's current longitude"),
+                    "dest_lat": types.Schema(type="NUMBER", description="Destination latitude"),
+                    "dest_lng": types.Schema(type="NUMBER", description="Destination longitude"),
                 },
-                required=["lat", "lng"],
+                required=["origin_lat", "origin_lng", "dest_lat", "dest_lng"],
             ),
         ),
         types.FunctionDeclaration(
-            name="get_safety_data",
-            description="Get traffic crash and safety data near a location",
+            name="build_maps_url",
+            description="Build a Google Maps navigation link so the tourist can walk to a destination",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
-                    "lat": types.Schema(type="NUMBER", description="Latitude"),
-                    "lng": types.Schema(type="NUMBER", description="Longitude"),
+                    "dest_name": types.Schema(type="STRING", description="Name of the destination"),
+                    "dest_lat": types.Schema(type="NUMBER", description="Destination latitude"),
+                    "dest_lng": types.Schema(type="NUMBER", description="Destination longitude"),
                 },
-                required=["lat", "lng"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="get_canopy_data",
-            description="Get street tree and canopy data near a location",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "lat": types.Schema(type="NUMBER", description="Latitude"),
-                    "lng": types.Schema(type="NUMBER", description="Longitude"),
-                },
-                required=["lat", "lng"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="get_air_quality",
-            description="Get current AQI for a location",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "lat": types.Schema(type="NUMBER", description="Latitude"),
-                    "lng": types.Schema(type="NUMBER", description="Longitude"),
-                },
-                required=["lat", "lng"],
+                required=["dest_name", "dest_lat", "dest_lng"],
             ),
         ),
     ])
@@ -123,7 +113,7 @@ async def handle_voice(websocket: WebSocket):
     lng = websocket.query_params.get("lng")
     gps_context = ""
     if lat and lng:
-        gps_context = f" The user is currently at GPS coordinates: lat={lat}, lng={lng}."
+        gps_context = f" The tourist is currently at GPS coordinates: lat={lat}, lng={lng} (Brooklyn, NYC)."
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
 
@@ -157,7 +147,6 @@ async def handle_voice(websocket: WebSocket):
                         async for msg in session.receive():
                             # Audio response
                             if msg.data:
-                                print(f"[Voice] Got audio: {len(msg.data)} bytes")
                                 audio_b64 = base64.b64encode(msg.data).decode()
                                 await websocket.send_json({
                                     "type": "audio",
@@ -165,7 +154,11 @@ async def handle_voice(websocket: WebSocket):
                                 })
 
                             # Transcription of agent's speech
-                            if msg.server_content and hasattr(msg.server_content, 'output_transcription') and msg.server_content.output_transcription:
+                            if (
+                                msg.server_content
+                                and hasattr(msg.server_content, "output_transcription")
+                                and msg.server_content.output_transcription
+                            ):
                                 await websocket.send_json({
                                     "type": "transcript",
                                     "role": "agent",
@@ -173,7 +166,11 @@ async def handle_voice(websocket: WebSocket):
                                 })
 
                             # Transcription of user's speech
-                            if msg.server_content and hasattr(msg.server_content, 'input_transcription') and msg.server_content.input_transcription:
+                            if (
+                                msg.server_content
+                                and hasattr(msg.server_content, "input_transcription")
+                                and msg.server_content.input_transcription
+                            ):
                                 await websocket.send_json({
                                     "type": "transcript",
                                     "role": "user",
@@ -185,7 +182,6 @@ async def handle_voice(websocket: WebSocket):
                                 for fc in msg.tool_call.function_calls:
                                     func = TOOL_FUNCTIONS.get(fc.name)
                                     if func:
-                                        # Run tool in thread pool (they use httpx sync)
                                         result = await asyncio.to_thread(func, **fc.args)
                                     else:
                                         result = {"error": f"Unknown tool: {fc.name}"}
@@ -197,6 +193,15 @@ async def handle_voice(websocket: WebSocket):
                                             id=fc.id,
                                         )
                                     )
+
+                                    # If build_maps_url was called, forward the URL to the client
+                                    # so the frontend can show a "Take me there" button
+                                    if fc.name == "build_maps_url" and "maps_url" in result:
+                                        await websocket.send_json({
+                                            "type": "maps_url",
+                                            "maps_url": result["maps_url"],
+                                            "destination": result.get("destination", ""),
+                                        })
 
                             # Turn complete
                             if msg.server_content and msg.server_content.turn_complete:
@@ -214,7 +219,6 @@ async def handle_voice(websocket: WebSocket):
                         if msg["type"] == "audio":
                             # Mic audio — forward as PCM to Gemini
                             audio_bytes = base64.b64decode(msg["data"])
-                            print(f"[Voice] Sending {len(audio_bytes)} bytes mic audio to Gemini")
                             await session.send_realtime_input(
                                 audio=types.Blob(
                                     data=audio_bytes,
@@ -241,7 +245,7 @@ async def handle_voice(websocket: WebSocket):
                                 turns=types.Content(
                                     role="user",
                                     parts=[types.Part.from_text(
-                                        text=f"GPS updated: lat={msg['lat']}, lng={msg['lng']}"
+                                        text=f"GPS updated: lat={msg['lat']}, lng={msg['lng']} (Brooklyn, NYC)"
                                     )],
                                 ),
                                 turn_complete=False,

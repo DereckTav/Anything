@@ -176,25 +176,29 @@ orchestrator = LlmAgent(
 
 ## Data Sources
 
-### 1. NYC Points of Interest — Primary Location Data
+### 1. Points of Interest — Primary Location Data
 
-**Dataset:** `https://data.cityofnewyork.us/resource/rxuy-2muj.json`
+**Source:** OpenStreetMap via Overpass API (`https://overpass-api.de/api/interpreter`)
+**Why not NYC Open Data POI dataset?** The original `rxuy-2muj` dataset was specified in requirements, but testing revealed it returns empty row objects with no field data — the dataset appears to have been migrated or deprecated on the Socrata platform. The Overpass API provides richer, more current POI data with no API key required.
+
 **Used for:** Geospatial query — "what POIs are within X meters of me?"
 **NOT used for:** Descriptions, hours, reviews (those come from Google Search)
 
 ```python
 # Tool: get_nearby_pois(lat, lng, radius_meters=500)
-# Socrata geospatial query
-url = "https://data.cityofnewyork.us/resource/rxuy-2muj.json"
-params = {
-    "$where": f"within_circle(the_geom, {lat}, {lng}, {radius_meters})",
-    "$limit": 20,
-    "$select": "name, facility_t, address, the_geom"
-}
-# Returns: [{name, facility_type, address, lat, lng}]
+# Overpass QL query for tourist-relevant tags
+query = """[out:json][timeout:8];
+(
+  node["tourism"~"attraction|museum|gallery|viewpoint"](around:500,{lat},{lng});
+  node["historic"](around:500,{lat},{lng});
+  node["amenity"~"theatre|library|arts_centre"](around:500,{lat},{lng});
+  node["leisure"~"park|garden"](around:500,{lat},{lng});
+);
+out body center;"""
+# Returns: [{name, type, address, lat, lng}]
 ```
 
-**Why only this dataset:** We don't need zoning, 311, crash data, or air quality for tourists. We need *what is nearby and worth visiting*. The POI dataset gives us the location anchors; Google Search fills in the story.
+**Why only this dataset:** We don't need zoning, 311, crash data, or air quality for tourists. We need *what is nearby and worth visiting*. The POI query gives us location anchors; Google Search fills in the story.
 
 ### 2. Google Vision API — Camera Context
 

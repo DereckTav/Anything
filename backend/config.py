@@ -5,29 +5,29 @@ from dotenv import load_dotenv
 # Load .env from project root
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-# All tunable backend values in one place. Change here — nowhere else.
+# ── POI Discovery ──
+POI_RADIUS_METERS       = 500    # Search radius. 500m ≈ 6 min walk at tourist pace.
+POI_MAX_RESULTS         = 20     # Max POIs returned per query.
+POI_CHIPS_MAX           = 5      # Max chips shown on screen at once.
 
-# --- Streaming ---
-TOOL_TIMEOUT_S = 15         # Max seconds to wait for any single NYC Open Data tool call.
-TOOLS_PARALLEL = True       # Run all 5 tools concurrently (asyncio.gather). Set False to debug sequentially.
+# ── Vision ──
+VISION_ENABLED          = True   # Kill switch. Set False to skip Vision API calls.
 
-# --- AR Labels ---
-AR_LABELS_ENABLED = True    # Mirror of frontend flag. False = agent skips AR label generation (saves tokens).
+# ── Maps ──
+MAPS_TRAVEL_MODE        = "walking"
 
-# --- Session ---
-MAX_STILLS_PER_SESSION = 12  # Cap on JPEG frames retained for the Synthesis Report.
-SESSION_TIMEOUT_S = 3600     # Abandon session after 1 hour of inactivity.
+# ── Tools ──
+TOOL_TIMEOUT_S          = 8      # Per-tool HTTP timeout in seconds.
+TOOLS_PARALLEL          = True   # Run tools concurrently where possible.
 
-# --- Report ---
-REPORT_ID_PREFIX = "CS"      # Report IDs: CS-0001, CS-0002, etc.
-PDF_MAX_STILLS = 6           # Max stills included in the PDF export.
+# ── Session ──
+SESSION_TIMEOUT_S       = 7200   # 2 hours (tourist exploring for a day).
 
-# --- GPS ---
-GPS_REQUIRED = True          # Master switch. If False, allows visual-only analysis (not recommended).
+# ── GPS ──
+GPS_REQUIRED            = True   # Require GPS for POI queries.
 
-# --- API Keys ---
-AIRNOW_API_KEY = os.getenv("AIRNOW_API_KEY", "")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+# ── API Keys ──
+GOOGLE_API_KEY          = os.getenv("GOOGLE_API_KEY", "")
 
-# --- NYC Open Data Base URL ---
-NYC_OPEN_DATA_BASE = "https://data.cityofnewyork.us/resource"
+# ── NYC Open Data ──
+NYC_OPEN_DATA_BASE      = "https://data.cityofnewyork.us/resource"

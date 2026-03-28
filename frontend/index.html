@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#121316">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" contentblack-translucent">
-  <title>URBANLENS</title>
+  <title>WAYPOINT — Brooklyn Guide</title>
   <link rel="manifest" href="manifest.json">
 
   <!-- Google Fonts -->
@@ -213,27 +213,27 @@
 
       <!-- Main content -->
       <div class="relative z-10 flex flex-col items-center text-center px-8">
-        <span class="font-label text-[10px] uppercase tracking-[0.3em] text-primary/60 mb-3">NYC Urban Intelligence</span>
-        <h1 class="font-headline italic text-5xl md:text-7xl text-primary mb-3">UrbanLens</h1>
+        <span class="font-label text-[10px] uppercase tracking-[0.3em] text-primary/60 mb-3">Brooklyn, NYC</span>
+        <h1 class="font-headline italic text-5xl md:text-7xl text-primary mb-3">WAYPOINT</h1>
         <p class="font-body text-sm md:text-base text-on-surface-variant max-w-xs leading-relaxed mb-14">
-          Point your camera at any NYC block. AI narrates what it sees — powered by real city data.
+          Your personal Brooklyn guide. Ask anything, discover nearby places, and explore like a local.
         </p>
 
         <!-- Start button -->
         <button id="btn-start"
           class="btn-ring relative bg-primary text-on-primary font-body font-semibold text-sm uppercase tracking-wider px-10 py-4 rounded-full transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_rgba(241,223,190,0.15)] active:scale-95">
           <span class="flex items-center gap-3">
-            <span class="material-symbols-outlined text-xl">videocam</span>
-            Begin Analysis
+            <span class="material-symbols-outlined text-xl">explore</span>
+            Start Exploring
           </span>
         </button>
 
-        <p class="font-label text-[10px] text-white/25 mt-8">Requires camera &amp; location access</p>
+        <p class="font-label text-[10px] text-white/25 mt-8">Requires mic &amp; location access</p>
       </div>
 
       <!-- Bottom attribution -->
       <div class="absolute bottom-8 flex flex-col items-center gap-1">
-        <span class="font-label text-[9px] text-white/15 uppercase tracking-widest">Powered by Gemini 2.5 Pro + NYC Open Data</span>
+        <span class="font-label text-[9px] text-white/15 uppercase tracking-widest">Powered by Gemini + NYC Open Data</span>
       </div>
     </div>
 
@@ -244,7 +244,7 @@
       <span class="material-symbols-outlined text-5xl text-error mb-4">location_off</span>
       <h2 class="font-headline italic text-2xl text-primary mb-2">Location Required</h2>
       <p class="font-body text-sm text-on-surface-variant text-center max-w-xs mb-8">
-        UrbanLens needs GPS coordinates to fetch real NYC data for your location. Please enable location services.
+        WAYPOINT needs your location to find nearby places and guide you around Brooklyn. Please enable location services.
       </p>
       <button id="btn-retry-gps"
         class="bg-primary text-on-primary font-body font-semibold text-sm px-8 py-3 rounded-full transition-all duration-200 hover:scale-105 active:scale-95">
@@ -255,9 +255,9 @@
     <!-- ════════════════════════════════════════════════════
          DYNAMIC SCREEN CONTAINERS (populated by app.js)
          ════════════════════════════════════════════════════ -->
-    <div id="screen-analyzing" class="fixed inset-0 hidden screen-transition"></div>
-    <div id="screen-inspecting" class="fixed inset-0 hidden screen-transition"></div>
-    <div id="screen-report" class="fixed inset-0 hidden screen-transition"></div>
+    <div id="screen-exploring" class="fixed inset-0 hidden screen-transition"></div>
+    <div id="screen-nearby"    class="fixed inset-0 hidden screen-transition" style="z-index:60;"></div>
+    <div id="screen-detail"    class="fixed inset-0 hidden screen-transition" style="z-index:70;"></div>
 
   </div>
 
