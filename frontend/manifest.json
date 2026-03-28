@@ -1,0 +1,17 @@
+{
+  "name": "UrbanLens — NYC Urban Intelligence",
+  "short_name": "UrbanLens",
+  "description": "Real-time AI-powered NYC urban site analysis",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#121316",
+  "theme_color": "#121316",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23121316' width='100' height='100' rx='20'/><text x='50' y='62' text-anchor='middle' fill='%23f1dfbe' font-size='40' font-family='serif' font-style='italic'>UL</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
