@@ -7,8 +7,10 @@ import string
 import random
 from datetime import datetime
 
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -278,6 +280,49 @@ async def analyze(websocket: WebSocket):
 
                 await websocket.send_json({"type": "report", **report_data})
 
+            elif msg_type == "chat":
+                # User spoke — send their text to the agent as a conversation turn
+                user_text = message.get("text", "")
+                if not user_text:
+                    continue
+
+                chat_content = types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=user_text)],
+                )
+                response = runner.run_async(
+                    user_id="user",
+                    session_id=session_id,
+                    new_message=chat_content,
+                )
+
+                final_text = ""
+                async for event in response:
+                    if event.is_final_response() and event.content and event.content.parts:
+                        for part in event.content.parts:
+                            if part.text:
+                                final_text += part.text
+
+                if final_text:
+                    ar_labels = extract_ar_labels(final_text)
+                    narration_text = clean_narration_text(final_text)
+
+                    elapsed = time.time() - sessions_data[session_id]["start_time"]
+                    minutes = int(elapsed // 60)
+                    seconds = int(elapsed % 60)
+                    timestamp = f"{minutes:02d}:{seconds:02d}"
+
+                    sessions_data[session_id]["narrations"].append({
+                        "timestamp": timestamp,
+                        "text": narration_text,
+                    })
+
+                    await websocket.send_json({
+                        "type": "narration",
+                        "text": narration_text,
+                        "ar_labels": ar_labels,
+                    })
+
             else:
                 await websocket.send_json({
                     "type": "error",
@@ -319,3 +364,15 @@ async def export_pdf(session_id: str):
         media_type="application/pdf",
         filename=f"URBANLENS-{target_session['report_id']}.pdf",
     )
+
+
+# Serve frontend static files — must be LAST (catch-all)
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+
+@app.get("/")
+async def serve_index():
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
