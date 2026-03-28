@@ -16,6 +16,12 @@ const ttsQueue = [];
 let ttsSpeaking = false;
 let cachedVoice = null;
 
+// Silence detection
+let silenceTimer = null;
+let lastSpeechTime = 0;
+const SILENCE_TIMEOUT_MS = 5000;  // 5 seconds of silence → auto-stop
+let onSilenceTimeoutCb = null;
+
 // Callbacks
 let onTranscriptCb = null;    // called with text transcription of user/agent speech
 let onVoiceStatusCb = null;   // called with status updates ('listening', 'speaking', 'idle')
@@ -41,10 +47,13 @@ if ('speechSynthesis' in window) {
  * @param {Function} onTranscript - called with {role, text} for transcriptions
  * @param {Function} onStatus - called with status string
  * @param {object} gps - {lat, lng} for tool context
+ * @param {Function} onSilenceTimeout - called when user is silent for 5 seconds
  */
-export async function startVoice(onTranscript, onStatus, gps) {
+export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout) {
   onTranscriptCb = onTranscript;
   onVoiceStatusCb = onStatus;
+  onSilenceTimeoutCb = onSilenceTimeout || null;
+  lastSpeechTime = Date.now();
 
   // Build WebSocket URL for voice endpoint
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -76,6 +85,8 @@ export async function startVoice(onTranscript, onStatus, gps) {
       for (let i = 0; i < float32.length; i++) rms += float32[i] * float32[i];
       rms = Math.sqrt(rms / float32.length);
       if (rms < 0.005) return;
+      // User is speaking — reset silence timer
+      lastSpeechTime = Date.now();
       // Convert float32 [-1,1] to int16 PCM
       const int16 = new Int16Array(float32.length);
       for (let i = 0; i < float32.length; i++) {
@@ -96,8 +107,20 @@ export async function startVoice(onTranscript, onStatus, gps) {
 
     voiceWs.onopen = () => {
       voiceConnected = true;
+      lastSpeechTime = Date.now();
       if (onVoiceStatusCb) onVoiceStatusCb('listening');
       console.log('[Voice] Connected');
+
+      // Start silence detection timer
+      if (silenceTimer) clearInterval(silenceTimer);
+      silenceTimer = setInterval(() => {
+        if (!voiceConnected) return;
+        const elapsed = Date.now() - lastSpeechTime;
+        if (elapsed >= SILENCE_TIMEOUT_MS) {
+          console.log('[Voice] Silence timeout — auto-stopping');
+          if (onSilenceTimeoutCb) onSilenceTimeoutCb();
+        }
+      }, 1000);
     };
 
     voiceWs.onmessage = (event) => {
@@ -106,6 +129,7 @@ export async function startVoice(onTranscript, onStatus, gps) {
       if (msg.type === 'audio') {
         // Play audio response (24kHz PCM base64)
         playPCMAudio(msg.data);
+        lastSpeechTime = Date.now();  // AI speaking = conversation active
         if (onVoiceStatusCb) onVoiceStatusCb('speaking');
       } else if (msg.type === 'transcript') {
         // Text transcription of speech
@@ -137,6 +161,12 @@ export async function startVoice(onTranscript, onStatus, gps) {
 
 export function stopVoice() {
   voiceConnected = false;
+
+  if (silenceTimer) {
+    clearInterval(silenceTimer);
+    silenceTimer = null;
+  }
+  onSilenceTimeoutCb = null;
 
   if (micProcessor) {
     micProcessor.disconnect();

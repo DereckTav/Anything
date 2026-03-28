@@ -279,6 +279,21 @@ async function enterAnalyzing() {
   });
 
   // Voice button — toggles real-time voice conversation via Gemini Live
+  function deactivateVoice() {
+    stopVoice();
+    resumeFrames();
+    voiceActive = false;
+    if (voiceFrameInterval) { clearInterval(voiceFrameInterval); voiceFrameInterval = null; }
+    const btn = document.getElementById('btn-voice');
+    const icon = btn?.querySelector('.material-symbols-outlined');
+    const label = btn?.querySelector('.font-label');
+    if (icon) icon.textContent = 'mic_off';
+    if (label) label.textContent = 'VOICE';
+    btn?.classList.remove('text-primary');
+    btn?.classList.add('text-white/40');
+    hideSubtitle();
+  }
+
   document.getElementById('btn-voice')?.addEventListener('click', async () => {
     const btn = document.getElementById('btn-voice');
     const icon = btn?.querySelector('.material-symbols-outlined');
@@ -314,7 +329,18 @@ async function enterAnalyzing() {
             userBuf = '';
           }
         },
-        gps
+        gps,
+        () => {
+          // Silence timeout — auto-stop voice and have AI narrate the current view
+          console.log('[App] Silence timeout — ending voice mode');
+          deactivateVoice();
+          // Trigger a normal AI analysis so the AI speaks about the current view
+          const frame = captureFrame();
+          if (frame) {
+            speakNarration('Let me tell you about what I see.');
+            sendMessage(frame, sessionId);
+          }
+        }
       );
 
       if (started) {
@@ -334,15 +360,7 @@ async function enterAnalyzing() {
         if (firstFrame) sendVoiceFrame(firstFrame);
       }
     } else {
-      stopVoice();
-      resumeFrames();
-      voiceActive = false;
-      if (voiceFrameInterval) { clearInterval(voiceFrameInterval); voiceFrameInterval = null; }
-      if (icon) icon.textContent = 'mic_off';
-      if (label) label.textContent = 'VOICE';
-      btn?.classList.remove('text-primary');
-      btn?.classList.add('text-white/40');
-      hideSubtitle();
+      deactivateVoice();
     }
   });
 
