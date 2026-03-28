@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:google.github.io)",
-      "WebFetch(domain:codelabs.developers.google.com)"
+      "WebFetch(domain:codelabs.developers.google.com)",
+      "Bash(python -m py_compile main.py agent/agent.py agent/prompts.py agent/tools/poi.py agent/tools/maps.py agent/tools/vision.py agent/tools/search.py agent/tools/cache.py agent/tools/geocoder.py agent/tools/complaints.py agent/tools/vision_zero.py agent/tools/tree_census.py agent/tools/air_quality.py)",
+      "Bash(python -m py_compile main.py agent/agent.py agent/prompts.py agent/tools/poi.py agent/tools/maps.py agent/tools/vision.py agent/tools/search.py)",
+      "Bash(VENV_PY=\"/c/Users/ds3/Documents/projects/2-Project Collabs/Anything/venv/Scripts/python.exe\")",
+      "Bash(__NEW_LINE_498ebea6d0fc6975__ \"$VENV_PY\" -c \":*)",
+      "Bash(VENV_PY=\"/c/Users/ds3/Documents/projects/2-Project Collabs/Anything/venv/Scripts/python.exe\" \"$VENV_PY\" -m pip list)"
     ]
   }
 }

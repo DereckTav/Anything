@@ -6,7 +6,7 @@ import {
   speakNarration, stopSpeaking, toggleMute, isMuted, unlockAudio,
   startVoice, stopVoice, isVoiceConnected, sendVoiceFrame,
 } from './audio.js';
-import { renderARLabels, clearARLabels, showSubtitle, hideSubtitle } from './overlay.js';
+import { showSubtitle, hideSubtitle } from './overlay.js';
 
 // ── State machine ──────────────────────────────────────────────
 
@@ -85,7 +85,6 @@ function handleWSMessage(data) {
         currentPOIs = data.pois;
         if (currentState === State.EXPLORING) {
           renderPOIChips(data.pois);
-          renderLandmarkHighlights(data.pois);
         }
       }
       break;
@@ -134,30 +133,6 @@ function clearPOIChips() {
   if (container) container.innerHTML = '';
 }
 
-// ── Landmark AR highlights ─────────────────────────────────────
-
-const HIGHLIGHT_POSITIONS = ['top-left', 'top-right', 'mid-left', 'mid-right'];
-
-function renderLandmarkHighlights(pois) {
-  const labels = pois.slice(0, 4).map((poi, i) => ({
-    text: poi.name,
-    source: poi.type || 'landmark',
-    position: HIGHLIGHT_POSITIONS[i % HIGHLIGHT_POSITIONS.length],
-    poi,
-  }));
-  renderARLabels(labels, (label) => askAboutLandmark(label.poi));
-}
-
-function askAboutLandmark(poi) {
-  const gps = getGPS();
-  showSubtitle(`Looking up ${poi.name}...`);
-  sendMessage({
-    type: 'chat',
-    text: `What's interesting about ${poi.name}? Give me 1-2 sentences like a knowledgeable local guide.`,
-    gps,
-  });
-}
-
 // ── Proactive discovery loop ───────────────────────────────────
 
 function startDiscoveryLoop() {
@@ -199,7 +174,6 @@ async function cleanup(state) {
     case State.EXPLORING:
       stopDiscoveryLoop();
       stopVoiceMode();
-      clearARLabels();
       hideSubtitle();
       stopSpeaking();
       

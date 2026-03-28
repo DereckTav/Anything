@@ -221,12 +221,13 @@ function startLocalTranscription() {
   localRecognition.lang = 'en-US';
 
   localRecognition.onresult = (e) => {
-    let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      interim += e.results[i][0].transcript;
-    }
-    if (interim && onTranscriptCb) {
-      onTranscriptCb({ role: 'user', text: interim });
+      if (e.results[i].isFinal) {
+        const text = e.results[i][0].transcript.trim();
+        if (text && onTranscriptCb) {
+          onTranscriptCb({ role: 'user', text });
+        }
+      }
     }
   };
 
