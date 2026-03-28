@@ -20,7 +20,7 @@ const State = Object.freeze({
 let currentState     = State.IDLE;
 let voiceActive      = false;
 let voiceFrameInterval = null;
-let gpsDisplayRAF    = null;
+
 let discoveryTimer   = null;
 let currentPOIs      = [];   // last received poi_chips
 let selectedPOI      = null; // POI tapped in nearby list or chips
@@ -156,7 +156,7 @@ async function cleanup(state) {
       clearARLabels();
       hideSubtitle();
       stopSpeaking();
-      cancelGPSDisplay();
+      
       break;
     case State.NEARBY:
     case State.DETAIL:
@@ -199,11 +199,14 @@ async function enterExploring() {
 
   connectWebSocket(handleWSMessage, () => {}, () => {});
   await waitForGPS(3000);
-  startGPSDisplay();
+  
   startDiscoveryLoop();
 
   // Voice button
   document.getElementById('btn-voice')?.addEventListener('click', toggleVoiceMode);
+
+  // Auto-start voice
+  toggleVoiceMode();
 
   // Nearby button
   document.getElementById('btn-nearby')?.addEventListener('click', () => {
@@ -216,7 +219,6 @@ async function enterExploring() {
     disconnectWebSocket();
     transitionTo(State.IDLE);
   });
-
 }
 
 // ── Voice mode ────────────────────────────────────────────────
@@ -234,19 +236,21 @@ async function toggleVoiceMode() {
 
     const started = await startVoice(
       (msg) => {
-        // Show rolling transcript as subtitle
         if (msg.role === 'agent' || msg.role === 'user') {
           const text = msg.text || '';
           const display = text.length > 120 ? '...' + text.slice(-120) : text;
           showSubtitle(display);
+        } else if (msg.role === 'thinking') {
+          showSubtitle('<i>Thinking...</i>');
         }
       },
       (status) => {
         if (!voiceActive) return;
         const labels = { listening: 'Listening', speaking: 'Speaking', idle: 'Voice' };
         if (statusLabel) statusLabel.textContent = labels[status] || 'Voice';
-        if (status === 'listening' || status === 'idle') {
-          if (label) label.textContent = status === 'listening' ? 'LISTENING' : 'VOICE';
+        if (status === 'listening') {
+          if (label) label.textContent = 'LISTENING';
+          showSubtitle('...');
         } else if (status === 'speaking') {
           if (label) label.textContent = 'SPEAKING';
         }
@@ -262,13 +266,11 @@ async function toggleVoiceMode() {
       btn?.classList.add('text-primary', 'scale-110');
       statusBar?.classList.remove('hidden');
 
-      // Send camera frame for visual context every 8s
-      voiceFrameInterval = setInterval(() => {
-        const frame = captureFrame();
-        if (frame) sendVoiceFrame(frame);
-      }, 8000);
-      const firstFrame = captureFrame();
-      if (firstFrame) sendVoiceFrame(firstFrame);
+      // Camera frames disabled for faster voice response
+      // voiceFrameInterval = setInterval(() => {
+      //   const frame = captureFrame();
+      //   if (frame) sendVoiceFrame(frame);
+      // }, 8000);
     }
 
   } else {
@@ -305,29 +307,7 @@ function waitForGPS(timeoutMs) {
   });
 }
 
-function startGPSDisplay() {
-  const el = document.getElementById('gps-coords');
-  if (!el) return;
-  let lastTs = 0;
-  const update = (ts) => {
-    if (currentState !== State.EXPLORING) return;
-    if (ts - lastTs > 500) {
-      const gps = getGPS();
-      if (gps) {
-        const ns = gps.lat >= 0 ? 'N' : 'S';
-        const ew = gps.lng >= 0 ? 'E' : 'W';
-        el.textContent = `${gps.lat.toFixed(4)}°${ns} ${Math.abs(gps.lng).toFixed(4)}°${ew}`;
-      }
-      lastTs = ts;
-    }
-    gpsDisplayRAF = requestAnimationFrame(update);
-  };
-  gpsDisplayRAF = requestAnimationFrame(update);
-}
 
-function cancelGPSDisplay() {
-  if (gpsDisplayRAF) { cancelAnimationFrame(gpsDisplayRAF); gpsDisplayRAF = null; }
-}
 
 // ═══════════════════════════════════════════════════════════════
 // Enter: NEARBY
