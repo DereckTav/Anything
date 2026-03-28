@@ -1,4 +1,4 @@
-# CITYSCOPE — Test Plan
+# URBANLENS — Test Plan
 
 ## How to Use This Document
 
@@ -176,7 +176,7 @@ Open each screen in a browser (Chrome DevTools open, mobile simulation on).
 - [ ] New subtitle replaces old one cleanly
 
 **Top Bar**
-- [ ] "CITYSCOPE" visible top-left
+- [ ] "URBANLENS" visible top-left
 - [ ] LAT/LNG updates as device moves
 - [ ] Format: "LAT: 40.7128 N" / "LNG: 74.0060 W"
 
@@ -403,7 +403,7 @@ curl -O https://YOUR_CLOUD_RUN_URL/report/CS-0001/pdf
 - [ ] `/ws/analyze` returns 400 (not 404 — confirms route exists)
 - [ ] `wss://` WebSocket connects successfully (test with `wscat`)
 - [ ] HTTPS active — no certificate errors in browser
-- [ ] Cloud Run logs visible: Cloud Console → Cloud Run → cityscope → Logs
+- [ ] Cloud Run logs visible: Cloud Console → Cloud Run → urbanlens → Logs
 - [ ] Min instances = 1 confirmed in Cloud Run → Edit & Deploy → Capacity
 - [ ] Memory usage < 400MB during active session (Cloud Run → Metrics tab)
 
