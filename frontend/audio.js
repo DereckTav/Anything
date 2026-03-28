@@ -111,7 +111,8 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout) 
       lastSpeechTime = Date.now();
       if (onVoiceStatusCb) onVoiceStatusCb('listening');
       console.log('[Voice] Connected');
-<<<<<<< HEAD
+
+      startLocalTranscription();
 
       // Start silence detection timer
       if (silenceTimer) clearInterval(silenceTimer);
@@ -123,9 +124,6 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout) 
           if (onSilenceTimeoutCb) onSilenceTimeoutCb();
         }
       }, 1000);
-=======
-      startLocalTranscription();
->>>>>>> 014c5c8c34f0722b07e0158c207b443680921548
     };
 
     voiceWs.onmessage = (event) => {
