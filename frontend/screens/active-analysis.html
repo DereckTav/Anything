@@ -1,73 +1,28 @@
 <!-- ═══ Active Analysis Screen ═══
-     Full-screen live video with AR overlay, subtitles, and nav pill.
+     Full-screen live video with voice conversation.
      Loaded into #screen-analyzing by app.js. -->
 
 <!-- Live video background -->
 <video id="camera-feed" autoplay playsinline muted
   class="fixed inset-0 w-full h-full object-cover z-0"></video>
 
-<!-- Gradient overlay -->
-<div class="fixed inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60 z-[1] pointer-events-none"></div>
+<!-- Subtle gradient for readability -->
+<div class="fixed inset-0 bg-gradient-to-b from-transparent via-transparent to-black/50 z-[1] pointer-events-none"></div>
 
-<!-- Scanning line effect -->
-<div class="scan-line z-[2]"></div>
-
-<!-- ── Top bar ── -->
-<div class="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-5 pt-[env(safe-area-inset-top,12px)] pb-3">
-  <div class="flex items-center gap-3">
-    <button id="btn-close-analysis" class="text-white/60 hover:text-white transition-colors">
-      <span class="material-symbols-outlined text-xl">close</span>
-    </button>
-    <span class="font-label text-[11px] uppercase tracking-[0.2em] text-white/80">URBANLENS</span>
-  </div>
-  <div class="flex items-center gap-2">
-    <span class="material-symbols-outlined text-sm text-primary/60">location_on</span>
-    <span id="gps-coords" class="font-label text-[10px] text-white/50 tabular-nums">--.----- N, --.----- W</span>
-  </div>
+<!-- ── Live caption area ── -->
+<div id="caption-container" class="fixed bottom-28 left-0 right-0 z-20 px-6 text-center transition-opacity duration-200" style="opacity:0;">
+  <span id="subtitle-text"
+    class="text-white text-base leading-relaxed font-sans drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"></span>
 </div>
 
-<!-- ── AR label overlay container (DOM-based) ── -->
-<div id="ar-overlay" class="fixed inset-0 z-10 pointer-events-none overflow-hidden"></div>
-
-<!-- ── Subtitle area ── -->
-<div class="fixed bottom-32 left-0 right-0 z-20 px-8 text-center">
-  <p id="subtitle-text"
-    class="font-headline italic text-lg md:text-xl text-white text-shadow-strong leading-relaxed"
-    style="opacity: 0;"></p>
-  <div id="loading-indicator" class="flex justify-center mt-3">
-    <div class="flex items-center gap-2">
-      <div class="pulse-dot"></div>
-      <span class="font-label text-[9px] text-white/30 uppercase">Analyzing</span>
-    </div>
-  </div>
-</div>
-
-<!-- ── Desktop side HUD ── -->
-<div class="fixed right-4 top-1/2 -translate-y-1/2 z-30 hidden md:flex flex-col items-center gap-4">
-  <span class="font-label text-[9px] uppercase tracking-[0.2em] text-primary/30"
-    style="writing-mode: vertical-rl; text-orientation: mixed;">AI Active Stream</span>
-  <div class="w-px h-16 bg-primary/10"></div>
-  <div class="pulse-dot"></div>
-</div>
-
-<!-- ── Bottom nav pill ── -->
-<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 glass-panel rounded-full px-8 py-4 flex gap-8">
-  <button id="btn-voice" class="flex flex-col items-center gap-1 text-white/40 hover:text-white transition-colors">
-    <span class="material-symbols-outlined text-2xl">mic</span>
+<!-- ── Bottom nav — voice only ── -->
+<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex gap-8">
+  <button id="btn-voice" class="flex flex-col items-center gap-1 text-white/60 hover:text-white transition-colors">
+    <span class="material-symbols-outlined text-3xl">mic</span>
     <span class="font-label text-[8px] uppercase tracking-tighter">Voice</span>
   </button>
-  <!-- Camera button disabled (facing-mode toggle not widely supported)
-  <button id="btn-cam" class="flex flex-col items-center gap-1 text-white/40 hover:text-white transition-colors">
-    <span class="material-symbols-outlined text-2xl">videocam</span>
-    <span class="font-label text-[8px] uppercase tracking-tighter">Cam</span>
-  </button>
-  -->
-  <button id="btn-inspect" class="flex flex-col items-center gap-1 text-[#D4C3A3] scale-110 transition-all">
-    <span class="material-symbols-outlined filled text-2xl">pause</span>
-    <span class="font-label text-[8px] uppercase tracking-tighter">Inspect</span>
-  </button>
-  <button id="btn-stop" class="flex flex-col items-center gap-1 text-white/40 hover:text-white transition-colors">
-    <span class="material-symbols-outlined text-2xl">cancel</span>
-    <span class="font-label text-[8px] uppercase tracking-tighter">Stop</span>
+  <button id="btn-close-analysis" class="flex flex-col items-center gap-1 text-white/40 hover:text-white transition-colors">
+    <span class="material-symbols-outlined text-2xl">close</span>
+    <span class="font-label text-[8px] uppercase tracking-tighter">Exit</span>
   </button>
 </div>

@@ -2,7 +2,7 @@ import {
   startCamera, stopCamera, captureFrame, getGPS, seedGPS,
   connectWebSocket, disconnectWebSocket, sendMessage, isConnected,
 } from './camera.js';
-import { speakNarration, stopSpeaking, toggleMute, isMuted, startListening, stopListening, unlockAudio } from './audio.js';
+import { speakNarration, stopSpeaking, toggleMute, isMuted, unlockAudio, startVoice, stopVoice, isVoiceConnected, sendVoiceFrame } from './audio.js';
 import { renderARLabels, clearARLabels, showSubtitle, hideSubtitle } from './overlay.js';
 
 // ── State machine ──
@@ -21,6 +21,8 @@ let pausedFrameDataUrl = null;
 let sessionStartTime = null;
 let gpsDisplayRAF = null;
 let awaitingResponse = false;
+let voiceFrameInterval = null;
+let voiceActive = false;
 
 // ── Screen loading ──
 
@@ -68,7 +70,7 @@ function handleWSMessage(data) {
 
   switch (data.type) {
     case 'narration':
-      if (currentState === State.ANALYZING) {
+      if (currentState === State.ANALYZING && !voiceActive) {
         speakNarration(data.text);
         if (data.ar_labels?.length) renderARLabels(data.ar_labels);
       }
@@ -140,8 +142,8 @@ function hideInspectorLoading() {
 
 let framesPaused = false;  // pause frames while user is talking
 
-function pauseFrames() { framesPaused = true; }
-function resumeFrames() { framesPaused = false; }
+function pauseFrames() { framesPaused = true; stopFrameLoop(); }
+function resumeFrames() { framesPaused = false; startFrameLoop(); }
 
 function startFrameLoop() {
   stopFrameLoop();
@@ -204,7 +206,7 @@ async function cleanup(state) {
       clearARLabels();
       hideSubtitle();
       stopSpeaking();
-      stopListening();
+      stopVoice();
       cancelGPSDisplay();
       break;
     case State.INSPECTING:
@@ -255,9 +257,10 @@ async function enterAnalyzing() {
 
   connectWebSocket(handleWSMessage, handleWSDisconnect, handleWSReconnect);
 
-  // Wait briefly for first GPS fix before starting frame loop
+  // Wait briefly for first GPS fix
   await waitForGPS(3000);
-  startFrameLoop();
+  // Frame analysis disabled — voice only
+  // startFrameLoop();
   startGPSDisplay();
 
   // Button handlers
@@ -275,46 +278,71 @@ async function enterAnalyzing() {
     transitionTo(State.IDLE);
   });
 
-  // Voice button — toggles conversational mic
-  let voiceActive = false;
-  document.getElementById('btn-voice')?.addEventListener('click', () => {
+  // Voice button — toggles real-time voice conversation via Gemini Live
+  document.getElementById('btn-voice')?.addEventListener('click', async () => {
     const btn = document.getElementById('btn-voice');
     const icon = btn?.querySelector('.material-symbols-outlined');
     const label = btn?.querySelector('.font-label');
 
     if (!voiceActive) {
-      // Start listening — user can talk to the agent
-      pauseFrames();  // stop sending frames while user talks
-      const started = startListening(
-        // onResult: user finished a phrase
-        (transcript) => {
-          showSubtitle(`You: "${transcript}"`);
-          sendMessage({ type: 'chat', text: transcript });
-          awaitingResponse = true;
-          setLoading(true);
+      pauseFrames();  // stop sending frames while in voice mode
+      stopSpeaking(); // stop any TTS
+
+      const gps = getGPS();
+      let agentBuf = '';
+      let userBuf = '';
+      const started = await startVoice(
+        (msg) => {
+          if (msg.role === 'agent') {
+            agentBuf += msg.text;
+            // Show last ~120 chars for rolling caption
+            const display = agentBuf.length > 120 ? '...' + agentBuf.slice(-120) : agentBuf;
+            showSubtitle(display);
+          } else if (msg.role === 'user') {
+            userBuf += msg.text;
+            const display = userBuf.length > 80 ? '...' + userBuf.slice(-80) : userBuf;
+            showSubtitle(display);
+          }
         },
-        // onStart: user began speaking — interrupt TTS
-        () => {
-          stopSpeaking();
-          hideSubtitle();
-        }
+        (status) => {
+          if (status === 'listening' && voiceActive) {
+            if (label) label.textContent = 'LISTENING';
+            agentBuf = '';
+            userBuf = '';
+          } else if (status === 'speaking' && voiceActive) {
+            if (label) label.textContent = 'SPEAKING';
+            userBuf = '';
+          }
+        },
+        gps
       );
+
       if (started) {
         voiceActive = true;
         if (icon) icon.textContent = 'mic';
-        if (label) label.textContent = 'TALKING';
+        if (label) label.textContent = 'LISTENING';
         btn?.classList.remove('text-white/40');
         btn?.classList.add('text-primary');
+
+        // Send a frame for visual context every 5 seconds
+        voiceFrameInterval = setInterval(() => {
+          const frame = captureFrame();
+          if (frame) sendVoiceFrame(frame);
+        }, 5000);
+        // Send first frame immediately
+        const firstFrame = captureFrame();
+        if (firstFrame) sendVoiceFrame(firstFrame);
       }
     } else {
-      // Stop listening and resume frame sending
-      stopListening();
+      stopVoice();
       resumeFrames();
       voiceActive = false;
+      if (voiceFrameInterval) { clearInterval(voiceFrameInterval); voiceFrameInterval = null; }
       if (icon) icon.textContent = 'mic_off';
       if (label) label.textContent = 'VOICE';
       btn?.classList.remove('text-primary');
       btn?.classList.add('text-white/40');
+      hideSubtitle();
     }
   });
 

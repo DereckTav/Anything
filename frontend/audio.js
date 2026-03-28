@@ -1,192 +1,288 @@
-const queue = [];
-let speaking = false;
+// ═══════════════════════════════════════════
+// URBANLENS Audio — Real-time voice via Gemini Live API
+// ═══════════════════════════════════════════
+
+// ── State ──
+let voiceWs = null;
+let micStream = null;
+let audioContext = null;
+let micProcessor = null;
+let playing = false;
 let muted = false;
+let voiceConnected = false;
+
+// TTS fallback state
+const ttsQueue = [];
+let ttsSpeaking = false;
 let cachedVoice = null;
-let voicesLoaded = false;
 
-// ── Speech Recognition (STT) ──
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let listening = false;
-let onSpeechResultCb = null;
-let onSpeechStartCb = null;
-let shouldContinueListening = false;
+// Callbacks
+let onTranscriptCb = null;    // called with text transcription of user/agent speech
+let onVoiceStatusCb = null;   // called with status updates ('listening', 'speaking', 'idle')
 
-// Preload voices — Chrome loads them asynchronously
+// Preload TTS voices for fallback
 if ('speechSynthesis' in window) {
   const loadVoices = () => {
     const voices = speechSynthesis.getVoices();
-    if (voices.length === 0) return;
-    voicesLoaded = true;
     cachedVoice = voices.find(v =>
       v.lang.startsWith('en') && /samantha|google|natural|daniel|karen/i.test(v.name)
     ) || voices.find(v => v.lang.startsWith('en') && v.localService) || null;
   };
-
   loadVoices();
   speechSynthesis.addEventListener('voiceschanged', loadVoices);
 }
 
 // ═══════════════════════════════════════════
-// TTS (Text-to-Speech)
+// Real-time Voice (Gemini Live API via backend proxy)
 // ═══════════════════════════════════════════
 
-// Mobile browsers block TTS until a user gesture triggers it once.
-// Call this on the first user tap to unlock audio.
-let audioUnlocked = false;
+/**
+ * Connect to the voice WebSocket and start streaming mic audio.
+ * @param {Function} onTranscript - called with {role, text} for transcriptions
+ * @param {Function} onStatus - called with status string
+ * @param {object} gps - {lat, lng} for tool context
+ */
+export async function startVoice(onTranscript, onStatus, gps) {
+  onTranscriptCb = onTranscript;
+  onVoiceStatusCb = onStatus;
+
+  // Build WebSocket URL for voice endpoint
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${location.host}/ws/voice${gps ? `?lat=${gps.lat}&lng=${gps.lng}` : ''}`;
+
+  try {
+    // Get mic access
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 16000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    });
+
+    // Set up AudioContext for resampling to 16kHz PCM
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const source = audioContext.createMediaStreamSource(micStream);
+
+    // ScriptProcessor to capture raw PCM (4096 samples per chunk)
+    micProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+    micProcessor.onaudioprocess = (e) => {
+      if (!voiceConnected || muted) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      // Noise gate — skip silent/quiet chunks
+      let rms = 0;
+      for (let i = 0; i < float32.length; i++) rms += float32[i] * float32[i];
+      rms = Math.sqrt(rms / float32.length);
+      if (rms < 0.005) return;
+      // Convert float32 [-1,1] to int16 PCM
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
+      }
+      // Send as base64
+      if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
+        const b64 = arrayBufferToBase64(int16.buffer);
+        voiceWs.send(JSON.stringify({ type: 'audio', data: b64 }));
+      }
+    };
+    source.connect(micProcessor);
+    micProcessor.connect(audioContext.destination);
+
+    // Connect WebSocket
+    voiceWs = new WebSocket(wsUrl);
+    voiceWs.binaryType = 'arraybuffer';
+
+    voiceWs.onopen = () => {
+      voiceConnected = true;
+      if (onVoiceStatusCb) onVoiceStatusCb('listening');
+      console.log('[Voice] Connected');
+    };
+
+    voiceWs.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+
+      if (msg.type === 'audio') {
+        // Play audio response (24kHz PCM base64)
+        playPCMAudio(msg.data);
+        if (onVoiceStatusCb) onVoiceStatusCb('speaking');
+      } else if (msg.type === 'transcript') {
+        // Text transcription of speech
+        if (onTranscriptCb) onTranscriptCb(msg);
+      } else if (msg.type === 'turn_complete') {
+        if (onVoiceStatusCb) onVoiceStatusCb('listening');
+      } else if (msg.type === 'error') {
+        console.error('[Voice] Error:', msg.message);
+        if (onTranscriptCb) onTranscriptCb({ role: 'system', text: msg.message });
+      }
+    };
+
+    voiceWs.onclose = () => {
+      voiceConnected = false;
+      if (onVoiceStatusCb) onVoiceStatusCb('idle');
+      console.log('[Voice] Disconnected');
+    };
+
+    voiceWs.onerror = (e) => {
+      console.error('[Voice] WebSocket error:', e);
+    };
+
+    return true;
+  } catch (err) {
+    console.error('[Voice] Failed to start:', err);
+    return false;
+  }
+}
+
+export function stopVoice() {
+  voiceConnected = false;
+
+  if (micProcessor) {
+    micProcessor.disconnect();
+    micProcessor = null;
+  }
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+  if (voiceWs) {
+    voiceWs.close(1000);
+    voiceWs = null;
+  }
+  if (onVoiceStatusCb) onVoiceStatusCb('idle');
+}
+
+export function isVoiceConnected() {
+  return voiceConnected;
+}
+
+// Update GPS context for the voice session
+export function updateVoiceGPS(gps) {
+  if (voiceWs && voiceWs.readyState === WebSocket.OPEN && gps) {
+    voiceWs.send(JSON.stringify({ type: 'gps', lat: gps.lat, lng: gps.lng }));
+  }
+}
+
+// Send a camera frame to the voice session for visual context
+export function sendVoiceFrame(imageB64) {
+  if (voiceWs && voiceWs.readyState === WebSocket.OPEN && imageB64) {
+    voiceWs.send(JSON.stringify({ type: 'frame', image_b64: imageB64 }));
+  }
+}
+
+// ── PCM Audio Playback (24kHz → 48kHz upsampled) ──
+
+let playbackCtx = null;
+let nextPlayTime = 0;
+
+function getPlaybackCtx() {
+  if (!playbackCtx || playbackCtx.state === 'closed') {
+    playbackCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    nextPlayTime = 0;
+  }
+  return playbackCtx;
+}
+
+function playPCMAudio(base64Data) {
+  const ctx = getPlaybackCtx();
+  const bytes = base64ToArrayBuffer(base64Data);
+  const int16 = new Int16Array(bytes);
+
+  // Upsample 24kHz → 48kHz with linear interpolation for smoother audio
+  const upsampled = new Float32Array(int16.length * 2);
+  for (let i = 0; i < int16.length; i++) {
+    const s = int16[i] / 32768;
+    const next = i < int16.length - 1 ? int16[i + 1] / 32768 : s;
+    upsampled[i * 2] = s;
+    upsampled[i * 2 + 1] = (s + next) / 2;
+  }
+
+  const buffer = ctx.createBuffer(1, upsampled.length, 48000);
+  buffer.getChannelData(0).set(upsampled);
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+
+  // Schedule seamlessly after the previous chunk
+  const now = ctx.currentTime;
+  if (nextPlayTime < now) nextPlayTime = now;
+  source.start(nextPlayTime);
+  nextPlayTime += buffer.duration;
+}
+
+// ── Helpers ──
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+// ═══════════════════════════════════════════
+// TTS Fallback (Web Speech API)
+// ═══════════════════════════════════════════
+
+let audioUnlockDone = false;
 export function unlockAudio() {
-  if (audioUnlocked || !('speechSynthesis' in window)) return;
-  // Speak an empty utterance to unlock
-  const unlock = new SpeechSynthesisUtterance('');
-  unlock.volume = 0;
-  speechSynthesis.speak(unlock);
-  audioUnlocked = true;
-  console.log('[TTS] Audio unlocked');
+  if (audioUnlockDone || !('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance('');
+  u.volume = 0;
+  speechSynthesis.speak(u);
+  audioUnlockDone = true;
 }
 
 export function speakNarration(text) {
-  if (!text || !('speechSynthesis' in window)) return;
-  if (muted) return;
-
-  queue.push(text);
-  processQueue();
+  if (!text || !('speechSynthesis' in window) || muted) return;
+  ttsQueue.push(text);
+  processTTSQueue();
 }
 
-function processQueue() {
-  if (speaking || muted || queue.length === 0) return;
-
-  speaking = true;
-  const text = queue.shift();
+function processTTSQueue() {
+  if (ttsSpeaking || muted || ttsQueue.length === 0) return;
+  ttsSpeaking = true;
+  const text = ttsQueue.shift();
   const utterance = new SpeechSynthesisUtterance(text);
-
   utterance.rate = 0.95;
   utterance.pitch = 1.0;
   utterance.volume = 1.0;
-
-  if (cachedVoice) {
-    utterance.voice = cachedVoice;
-  }
-
-  utterance.onend = () => {
-    speaking = false;
-    processQueue();
-  };
-
+  if (cachedVoice) utterance.voice = cachedVoice;
+  utterance.onend = () => { ttsSpeaking = false; processTTSQueue(); };
   utterance.onerror = (e) => {
-    // 'interrupted' and 'canceled' are expected when calling cancel()
-    if (e.error !== 'interrupted' && e.error !== 'canceled') {
-      console.warn('[TTS] Error:', e.error);
-    }
-    speaking = false;
-    processQueue();
+    if (e.error !== 'interrupted' && e.error !== 'canceled') console.warn('[TTS] Error:', e.error);
+    ttsSpeaking = false;
+    processTTSQueue();
   };
-
   speechSynthesis.speak(utterance);
 }
 
 export function stopSpeaking() {
-  queue.length = 0;
-  speaking = false;
-  if ('speechSynthesis' in window) {
-    speechSynthesis.cancel();
-  }
+  ttsQueue.length = 0;
+  ttsSpeaking = false;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
-export function isSpeaking() {
-  return speaking;
-}
+// Keep old exports for compatibility
+export function startListening() { return false; }
+export function stopListening() {}
 
-// ═══════════════════════════════════════════
-// STT (Speech-to-Text) — conversational input
-// ═══════════════════════════════════════════
-
-/**
- * Start continuous listening. Calls onResult(transcript) when user finishes a phrase.
- * Calls onStart() when user begins speaking (use this to interrupt TTS).
- */
-export function startListening(onResult, onStart) {
-  if (!SpeechRecognition) {
-    console.warn('[STT] SpeechRecognition not supported');
-    return false;
-  }
-
-  onSpeechResultCb = onResult;
-  onSpeechStartCb = onStart;
-  shouldContinueListening = true;
-
-  if (recognition) {
-    recognition.abort();
-    recognition = null;
-  }
-
-  recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
-  recognition.interimResults = false;
-  recognition.continuous = true;
-  recognition.maxAlternatives = 1;
-
-  recognition.onstart = () => {
-    listening = true;
-    console.log('[STT] Listening...');
-  };
-
-  recognition.onspeechstart = () => {
-    // User started talking — interrupt TTS
-    if (onSpeechStartCb) onSpeechStartCb();
-  };
-
-  recognition.onresult = (event) => {
-    // Get the latest final result
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (event.results[i].isFinal) {
-        const transcript = event.results[i][0].transcript.trim();
-        if (transcript && onSpeechResultCb) {
-          console.log('[STT] Result:', transcript);
-          onSpeechResultCb(transcript);
-        }
-      }
-    }
-  };
-
-  recognition.onerror = (e) => {
-    if (e.error === 'aborted' || e.error === 'no-speech') return;
-    console.warn('[STT] Error:', e.error);
-  };
-
-  recognition.onend = () => {
-    listening = false;
-    // Auto-restart if we should still be listening
-    if (shouldContinueListening) {
-      try {
-        recognition.start();
-      } catch {
-        // Already started or other issue — ignore
-      }
-    }
-  };
-
-  try {
-    recognition.start();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function stopListening() {
-  shouldContinueListening = false;
-  listening = false;
-  if (recognition) {
-    recognition.abort();
-    recognition = null;
-  }
-}
-
-export function isListening() {
-  return listening;
-}
-
-/** Toggle mute state. Returns new muted value. */
 export function toggleMute() {
   muted = !muted;
   if (muted) stopSpeaking();

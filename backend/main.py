@@ -19,6 +19,7 @@ from agent.agent import root_agent
 from agent.prompts import LAYER_SUMMARY_PROMPT, REPORT_PROMPT
 from config import GPS_REQUIRED, REPORT_ID_PREFIX, MAX_STILLS_PER_SESSION
 from report.generator import generate_pdf
+from voice import handle_voice
 
 app = FastAPI(title="URBANLENS API")
 session_service = InMemorySessionService()
@@ -364,6 +365,11 @@ async def export_pdf(session_id: str):
         media_type="application/pdf",
         filename=f"URBANLENS-{target_session['report_id']}.pdf",
     )
+
+
+@app.websocket("/ws/voice")
+async def voice(websocket: WebSocket):
+    await handle_voice(websocket)
 
 
 # Serve frontend static files — must be LAST (catch-all)
