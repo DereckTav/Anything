@@ -37,6 +37,7 @@ def search_web(query: str) -> dict:
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())],
                 temperature=0.1,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         return {
