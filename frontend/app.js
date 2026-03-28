@@ -1,5 +1,5 @@
 import {
-  startCamera, stopCamera, captureFrame, getGPS,
+  startCamera, stopCamera, captureFrame, getGPS, seedGPS,
   connectWebSocket, disconnectWebSocket, sendMessage, isConnected,
 } from './camera.js';
 import { speakNarration, stopSpeaking, toggleMute, isMuted } from './audio.js';
@@ -270,19 +270,32 @@ async function enterAnalyzing() {
 
   document.getElementById('btn-voice')?.addEventListener('click', () => {
     const muted = toggleMute();
-    const icon = document.querySelector('#btn-voice .material-symbols-outlined');
-    const label = document.querySelector('#btn-voice .font-label');
+    const btn = document.getElementById('btn-voice');
+    const icon = btn?.querySelector('.material-symbols-outlined');
+    const label = btn?.querySelector('.font-label');
     if (icon) icon.textContent = muted ? 'volume_off' : 'mic';
     if (label) label.textContent = muted ? 'MUTED' : 'VOICE';
-    document.getElementById('btn-voice')?.classList.toggle('text-white/40', !muted);
-    document.getElementById('btn-voice')?.classList.toggle('text-error/70', muted);
+    btn?.classList.toggle('text-white/40', !muted);
+    btn?.classList.toggle('text-white/30', muted);
   });
 
-  document.getElementById('btn-cam')?.addEventListener('click', () => {
-    // Toggle camera facing mode not widely supported — visual feedback only
-    const icon = document.querySelector('#btn-cam .material-symbols-outlined');
-    if (icon) icon.classList.toggle('filled');
-  });
+  // Sync mute button to current audio state (persists across screen transitions)
+  const currentlyMuted = isMuted();
+  if (currentlyMuted) {
+    const voiceBtn = document.getElementById('btn-voice');
+    const voiceIcon = voiceBtn?.querySelector('.material-symbols-outlined');
+    const voiceLabel = voiceBtn?.querySelector('.font-label');
+    if (voiceIcon) voiceIcon.textContent = 'volume_off';
+    if (voiceLabel) voiceLabel.textContent = 'MUTED';
+    voiceBtn?.classList.remove('text-white/40');
+    voiceBtn?.classList.add('text-white/30');
+  }
+
+  // Camera button disabled (facing-mode toggle not widely supported)
+  // document.getElementById('btn-cam')?.addEventListener('click', () => {
+  //   const icon = document.querySelector('#btn-cam .material-symbols-outlined');
+  //   if (icon) icon.classList.toggle('filled');
+  // });
 }
 
 function waitForGPS(timeoutMs) {
@@ -599,12 +612,13 @@ async function requestPermissions() {
   }
 
   try {
-    await new Promise((resolve, reject) => {
+    const position = await new Promise((resolve, reject) => {
       navigator.geolocation.getCurrentPosition(resolve, reject, {
         enableHighAccuracy: true,
         timeout: 10000,
       });
     });
+    seedGPS(position);
     hideGPSOverlay();
     transitionTo(State.ANALYZING);
   } catch {
