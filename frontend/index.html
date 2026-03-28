@@ -59,20 +59,6 @@
       font-variation-settings: 'FILL' 1, 'wght' 200, 'GRAD' 0, 'opsz' 24;
     }
 
-    /* ── Scanning line (Active Analysis) ── */
-    @keyframes scan {
-      0%   { top: 0; }
-      100% { top: 100%; }
-    }
-    .scan-line {
-      position: absolute;
-      left: 0;
-      width: 100%;
-      height: 1px;
-      background: linear-gradient(to right, transparent, rgba(241, 223, 190, 0.3), transparent);
-      animation: scan 8s linear infinite;
-      pointer-events: none;
-    }
 
     /* ── Viewfinder bracket pulse ── */
     @keyframes bracket-pulse {
