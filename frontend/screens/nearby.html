@@ -1,8 +1,8 @@
 <!-- ═══ Nearby Screen ═══
-     Scrollable list of nearby POIs.
+     Scrollable list + map of nearby POIs.
      Loaded into #screen-nearby by app.js. -->
 
-<!-- Dark background with subtle gradient -->
+<!-- Dark background -->
 <div class="fixed inset-0 bg-background z-0"></div>
 <div class="fixed inset-0 bg-gradient-to-b from-primary/[0.03] to-transparent z-[1] pointer-events-none"></div>
 
@@ -17,26 +17,37 @@
       <span class="font-label text-[9px] uppercase tracking-[0.25em] text-primary/60 block">Around you</span>
       <span class="font-headline italic text-lg text-primary">Nearby Places</span>
     </div>
-    <div class="w-16"></div><!-- spacer -->
+    <!-- List / Map toggle -->
+    <div class="flex items-center bg-surface-container rounded-full p-0.5 gap-0.5">
+      <button id="btn-view-list"
+        class="font-label text-[9px] uppercase tracking-wider px-3 py-1.5 rounded-full transition-all bg-primary text-on-primary">
+        List
+      </button>
+      <button id="btn-view-map"
+        class="font-label text-[9px] uppercase tracking-wider px-3 py-1.5 rounded-full transition-all text-on-surface-variant hover:text-primary">
+        Map
+      </button>
+    </div>
   </div>
 </div>
 
-<!-- ── POI list ── -->
-<div class="fixed inset-0 overflow-y-auto z-20 pt-20 pb-8 px-4">
+<!-- ── List view ── -->
+<div id="nearby-list-view" class="fixed inset-0 overflow-y-auto z-20 pt-20 pb-8 px-4">
 
-  <!-- Loading state -->
   <div id="nearby-loading" class="flex flex-col items-center justify-center py-16">
     <div class="pulse-dot mb-3"></div>
     <span class="font-label text-[10px] text-white/30 uppercase tracking-wider">Finding nearby places...</span>
   </div>
 
-  <!-- Empty state -->
   <div id="nearby-empty" class="hidden flex flex-col items-center justify-center py-16 px-8 text-center">
     <span class="material-symbols-outlined text-4xl text-white/20 mb-3">location_off</span>
     <p class="font-body text-sm text-on-surface-variant">No places found nearby yet.<br>Try asking your guide to look around!</p>
   </div>
 
-  <!-- POI list items (injected by app.js) -->
   <div id="nearby-list" class="space-y-3 hidden"></div>
+</div>
 
+<!-- ── Map view ── -->
+<div id="nearby-map-view" class="fixed inset-0 z-20 pt-16 hidden">
+  <div id="leaflet-map" style="width:100%;height:100%;"></div>
 </div>

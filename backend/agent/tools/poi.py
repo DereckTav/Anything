@@ -6,8 +6,19 @@ the free OpenStreetMap Overpass API instead, which has richer and up-to-date dat
 No API key required.
 """
 
+import math
 import httpx
 from config import TOOL_TIMEOUT_S
+
+
+def _dist_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Haversine distance in metres."""
+    R = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    a = (math.sin(math.radians(lat2 - lat1) / 2) ** 2
+         + math.cos(phi1) * math.cos(phi2)
+         * math.sin(math.radians(lng2 - lng1) / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
 
 # Overpass API endpoint
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -113,16 +124,22 @@ def get_nearby_pois(lat: float, lng: float, radius_meters: int = 500) -> dict:
                 address_parts.append(tags["addr:street"])
             address = ", ".join(address_parts) if address_parts else ""
 
+            dist = _dist_m(lat, lng, poi_lat, poi_lng)
+            walk_min = round(dist / 80)  # ~80 m/min tourist pace
+
             pois.append({
-                "name":    name,
-                "type":    poi_type,
-                "address": address,
-                "lat":     poi_lat,
-                "lng":     poi_lng,
+                "name":       name,
+                "type":       poi_type,
+                "address":    address,
+                "lat":        poi_lat,
+                "lng":        poi_lng,
+                "distance_m": round(dist),
+                "walk_min":   walk_min,
             })
 
-            if len(pois) >= 20:
-                break
+        # Sort closest first, then cap
+        pois.sort(key=lambda p: p["distance_m"])
+        pois = pois[:20]
 
         return {"pois": pois, "count": len(pois), "radius_meters": radius_meters}
 

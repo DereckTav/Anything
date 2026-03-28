@@ -29,6 +29,25 @@ let selectedPOI      = null; // POI tapped in nearby list or chips
 
 const screenCache = {};
 
+// Lazy-load Leaflet (only needed for the map view)
+async function loadLeaflet() {
+  if (window.L) return;
+  if (!document.getElementById('leaflet-css')) {
+    const link = document.createElement('link');
+    link.id = 'leaflet-css';
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+  }
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
 async function loadScreen(name) {
   if (screenCache[name]) return screenCache[name];
   const res = await fetch(`screens/${name}.html`);
@@ -349,9 +368,9 @@ async function enterNearby() {
     transitionTo(State.EXPLORING);
   });
 
-  const listEl     = document.getElementById('nearby-list');
-  const loadingEl  = document.getElementById('nearby-loading');
-  const emptyEl    = document.getElementById('nearby-empty');
+  const listEl    = document.getElementById('nearby-list');
+  const loadingEl = document.getElementById('nearby-loading');
+  const emptyEl   = document.getElementById('nearby-empty');
 
   if (!currentPOIs.length) {
     loadingEl?.classList.add('hidden');
@@ -362,6 +381,7 @@ async function enterNearby() {
   loadingEl?.classList.add('hidden');
   listEl?.classList.remove('hidden');
 
+  // Build list rows
   currentPOIs.forEach(poi => {
     const item = document.createElement('button');
     item.className = [
@@ -396,6 +416,77 @@ async function enterNearby() {
     item.addEventListener('click', () => openPlaceDetail(poi));
     listEl?.appendChild(item);
   });
+
+  // ── List / Map toggle ──
+  let leafletMap = null;
+
+  async function showMapView() {
+    document.getElementById('nearby-list-view')?.classList.add('hidden');
+    document.getElementById('nearby-map-view')?.classList.remove('hidden');
+    document.getElementById('btn-view-list')?.classList.remove('bg-primary', 'text-on-primary');
+    document.getElementById('btn-view-list')?.classList.add('text-on-surface-variant');
+    document.getElementById('btn-view-map')?.classList.add('bg-primary', 'text-on-primary');
+    document.getElementById('btn-view-map')?.classList.remove('text-on-surface-variant');
+
+    if (leafletMap) { leafletMap.invalidateSize(); return; }
+
+    // Lazy-load Leaflet
+    await loadLeaflet();
+
+    const gps = getGPS();
+    const centerLat = gps?.lat ?? currentPOIs[0]?.lat ?? 40.7033;
+    const centerLng = gps?.lng ?? currentPOIs[0]?.lng ?? -73.9888;
+
+    leafletMap = window.L.map('leaflet-map', { zoomControl: true }).setView([centerLat, centerLng], 15);
+
+    // Dark CartoDB tiles — no API key needed
+    window.L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    }).addTo(leafletMap);
+
+    // User position marker
+    if (gps) {
+      const userIcon = window.L.divIcon({
+        className: '',
+        html: '<div style="width:14px;height:14px;background:#f1dfbe;border-radius:50%;border:2px solid #fff;box-shadow:0 0 8px rgba(241,223,190,0.6);"></div>',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      });
+      window.L.marker([gps.lat, gps.lng], { icon: userIcon })
+        .addTo(leafletMap)
+        .bindPopup('You are here');
+    }
+
+    // POI markers
+    currentPOIs.forEach(poi => {
+      if (poi.lat == null || poi.lng == null) return;
+      const poiIcon = window.L.divIcon({
+        className: '',
+        html: '<div style="width:10px;height:10px;background:#cec5b9;border-radius:50%;border:1.5px solid #f1dfbe;"></div>',
+        iconSize: [10, 10],
+        iconAnchor: [5, 5],
+      });
+      const walkLabel = poi.walk_min != null ? ` · ${poi.walk_min} min walk` : '';
+      window.L.marker([poi.lat, poi.lng], { icon: poiIcon })
+        .addTo(leafletMap)
+        .bindPopup(`<strong>${escapeHTML(poi.name)}</strong><br><span style="font-size:11px;color:#aaa;">${escapeHTML(poi.type || '')}${walkLabel}</span>`)
+        .on('click', () => openPlaceDetail(poi));
+    });
+  }
+
+  function showListView() {
+    document.getElementById('nearby-map-view')?.classList.add('hidden');
+    document.getElementById('nearby-list-view')?.classList.remove('hidden');
+    document.getElementById('btn-view-map')?.classList.remove('bg-primary', 'text-on-primary');
+    document.getElementById('btn-view-map')?.classList.add('text-on-surface-variant');
+    document.getElementById('btn-view-list')?.classList.add('bg-primary', 'text-on-primary');
+    document.getElementById('btn-view-list')?.classList.remove('text-on-surface-variant');
+  }
+
+  document.getElementById('btn-view-map')?.addEventListener('click', showMapView);
+  document.getElementById('btn-view-list')?.addEventListener('click', showListView);
 }
 
 // ═══════════════════════════════════════════════════════════════
