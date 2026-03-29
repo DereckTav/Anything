@@ -161,7 +161,7 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
         if (onTranscriptCb) onTranscriptCb(msg);
       } else if (msg.type === 'turn_complete') {
         if (onVoiceStatusCb) onVoiceStatusCb('listening');
-      } else if (msg.type === 'poi_chips' || msg.type === 'maps_url') {
+      } else if (msg.type === 'poi_chips' || msg.type === 'maps_url' || msg.type === 'tool_status') {
         if (onToolDataCb) onToolDataCb(msg);
       } else if (msg.type === 'error') {
         console.error('[Voice] Error:', msg.message);

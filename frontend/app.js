@@ -281,14 +281,22 @@ async function toggleVoiceMode() {
       gps,
       null, // onSilenceTimeout
       (toolData) => {
-        // Handle POI updates from voice agent tools
         if (toolData.type === 'poi_chips') {
           if (toolData.pois?.length) {
             currentPOIs = toolData.pois;
           }
         } else if (toolData.type === 'maps_url') {
-           // We could show a specific "Navigate" prompt here
-           console.log('[Voice] Destination ready:', toolData.maps_url);
+          console.log('[Voice] Destination ready:', toolData.maps_url);
+        } else if (toolData.type === 'tool_status') {
+          if (toolData.status === 'calling') {
+            showThinking();
+            showSubtitle(toolData.label);
+          } else if (toolData.status === 'error') {
+            hideThinking();
+            showSubtitle(toolData.label || 'Something went wrong.');
+          } else if (toolData.status === 'done') {
+            hideThinking();
+          }
         }
       }
     );

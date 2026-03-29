@@ -120,6 +120,22 @@ TOOL_DECLARATIONS = [
 ]
 
 
+def _format_poi_context(pois: list) -> str:
+    """Format pre-fetched POIs as context for the voice agent system prompt."""
+    if not pois:
+        return ""
+
+    lines = ["\nYou already know these places near the user (pre-loaded, no need to call tools for these):"]
+    for p in pois[:15]:  # Cap at 15 to keep context manageable
+        line = f"- {p['name']} ({p['type']}) — {p.get('walk_min', '?')} min walk"
+        if p.get('address'):
+            line += f", {p['address']}"
+        lines.append(line)
+
+    lines.append("\nUse this info to answer casual questions. Only call get_nearby_pois if the user wants a fresh search or a different area.")
+    return "\n".join(lines)
+
+
 async def handle_voice(websocket: WebSocket):
     """Handle real-time voice conversation via Gemini Live API."""
     await websocket.accept()
@@ -128,14 +144,23 @@ async def handle_voice(websocket: WebSocket):
     lat = websocket.query_params.get("lat")
     lng = websocket.query_params.get("lng")
     gps_context = ""
+    poi_context = ""
+    cached_pois = []
     if lat and lng:
-        gps_context = f" The tourist is currently at GPS coordinates: lat={lat}, lng={lng} (Brooklyn, NYC)."
+        gps_context = f" The user is currently at GPS coordinates: lat={lat}, lng={lng}."
+        # Pre-fetch nearby POIs once — used for both Gemini context and frontend Nearby tab
+        try:
+            cached_result = await asyncio.to_thread(get_nearby_pois, float(lat), float(lng), 3200)
+            cached_pois = cached_result.get("pois", [])
+            poi_context = _format_poi_context(cached_pois)
+        except Exception as e:
+            print(f"[Voice] POI pre-cache failed: {e}")
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
 
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
-        system_instruction=VOICE_SYSTEM_PROMPT + gps_context,
+        system_instruction=VOICE_SYSTEM_PROMPT + gps_context + poi_context,
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -147,6 +172,10 @@ async def handle_voice(websocket: WebSocket):
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
     )
+
+    # Send pre-cached POIs to frontend so Nearby tab is populated immediately
+    if cached_pois:
+        await websocket.send_json({"type": "poi_chips", "pois": cached_pois})
 
     try:
         print("[Voice] Connecting to Gemini Live API...")
@@ -196,11 +225,35 @@ async def handle_voice(websocket: WebSocket):
                             # Tool calls
                             if msg.tool_call:
                                 for fc in msg.tool_call.function_calls:
+                                    # Notify frontend that a tool is being called
+                                    tool_labels = {
+                                        "get_nearby_pois": "Searching nearby places...",
+                                        "analyze_frame": "Analyzing what you see...",
+                                        "get_distance": "Checking distance...",
+                                        "get_transit_directions": "Finding transit routes...",
+                                        "build_maps_url": "Getting directions...",
+                                    }
+                                    await websocket.send_json({
+                                        "type": "tool_status",
+                                        "tool": fc.name,
+                                        "status": "calling",
+                                        "label": tool_labels.get(fc.name, f"Using {fc.name}..."),
+                                    })
+
                                     func = TOOL_FUNCTIONS.get(fc.name)
                                     if func:
                                         result = await asyncio.to_thread(func, **fc.args)
                                     else:
                                         result = {"error": f"Unknown tool: {fc.name}"}
+
+                                    # Notify frontend tool is done (or errored)
+                                    has_error = "error" in result and result["error"]
+                                    await websocket.send_json({
+                                        "type": "tool_status",
+                                        "tool": fc.name,
+                                        "status": "error" if has_error else "done",
+                                        "label": result.get("error", "") if has_error else "",
+                                    })
 
                                     await session.send_tool_response(
                                         function_responses=types.FunctionResponse(
@@ -269,7 +322,7 @@ async def handle_voice(websocket: WebSocket):
                                 turns=types.Content(
                                     role="user",
                                     parts=[types.Part.from_text(
-                                        text=f"GPS updated: lat={msg['lat']}, lng={msg['lng']} (Brooklyn, NYC)"
+                                        text=f"GPS updated: lat={msg['lat']}, lng={msg['lng']}"
                                     )],
                                 ),
                                 turn_complete=False,
