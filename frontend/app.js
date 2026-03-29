@@ -85,9 +85,6 @@ function handleWSMessage(data) {
       hideThinking();
       if (data.pois?.length) {
         currentPOIs = data.pois;
-        if (currentState === State.EXPLORING) {
-          renderPOIChips(data.pois);
-        }
       }
       break;
 
@@ -101,40 +98,6 @@ function handleWSMessage(data) {
       console.error('[WS] Backend error:', data.message);
       break;
   }
-}
-
-// ── POI chip rendering ─────────────────────────────────────────
-
-function renderPOIChips(pois) {
-  const container = document.getElementById('poi-chips-container');
-  if (!container) return;
-
-  container.innerHTML = '';
-  pois.slice(0, 5).forEach(poi => {
-    const chip = document.createElement('button');
-    chip.className = [
-      'flex-shrink-0 glass-panel rounded-full px-4 py-2',
-      'border border-primary/20 hover:border-primary/60 transition-all duration-200',
-      'flex items-center gap-2 max-w-[220px]',
-      'active:scale-95',
-    ].join(' ');
-
-    const walkText = poi.walk_min != null ? `${poi.walk_min} min` : '';
-
-    chip.innerHTML = `
-      <span class="material-symbols-outlined text-sm text-primary/70">place</span>
-      <span class="font-body text-xs text-white truncate">${escapeHTML(poi.name)}</span>
-      ${walkText ? `<span class="font-label text-[9px] text-primary/50 flex-shrink-0">${escapeHTML(walkText)}</span>` : ''}
-    `;
-
-    chip.addEventListener('click', () => openPlaceDetail(poi));
-    container.appendChild(chip);
-  });
-}
-
-function clearPOIChips() {
-  const container = document.getElementById('poi-chips-container');
-  if (container) container.innerHTML = '';
 }
 
 // ── Thinking indicator ─────────────────────────────────────────
@@ -306,9 +269,6 @@ async function toggleVoiceMode() {
         if (toolData.type === 'poi_chips') {
           if (toolData.pois?.length) {
             currentPOIs = toolData.pois;
-            if (currentState === State.EXPLORING) {
-              renderPOIChips(toolData.pois);
-            }
           }
         } else if (toolData.type === 'maps_url') {
            // We could show a specific "Navigate" prompt here
