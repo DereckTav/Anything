@@ -266,10 +266,13 @@ async function toggleVoiceMode() {
       },
       (status) => {
         if (!voiceActive) return;
-        const labels = { listening: 'Listening', speaking: 'Speaking', idle: 'Voice' };
+        const labels = { listening: 'Listening', speaking: 'Speaking', processing: 'Thinking', idle: 'Voice' };
         if (statusLabel) statusLabel.textContent = labels[status] || 'Voice';
         if (status === 'listening') {
           if (label) label.textContent = 'LISTENING';
+        } else if (status === 'processing') {
+          showThinking();
+          if (label) label.textContent = 'THINKING';
         } else if (status === 'speaking') {
           hideThinking();
           if (label) label.textContent = 'SPEAKING';

@@ -23,6 +23,12 @@ let lastSpeechTime = 0;
 const SILENCE_TIMEOUT_MS = 5000;  // 5 seconds of silence → auto-stop
 let onSilenceTimeoutCb = null;
 
+// Processing detection — show "thinking" after user stops speaking
+let processingTimer = null;
+let userWasSpeaking = false;
+const PROCESSING_DELAY_MS = 800;  // Show "processing" 800ms after user goes silent
+const SPEECH_RMS_THRESHOLD = 0.02;  // RMS above this = user is actively speaking
+
 // Callbacks
 let onTranscriptCb = null;    // called with text transcription of user/agent speech
 let onVoiceStatusCb = null;   // called with status updates ('listening', 'speaking', 'idle')
@@ -84,13 +90,24 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
     micProcessor.onaudioprocess = (e) => {
       if (!voiceConnected || muted) return;
       const float32 = e.inputBuffer.getChannelData(0);
-      // Noise gate — skip silent/quiet chunks
       let rms = 0;
       for (let i = 0; i < float32.length; i++) rms += float32[i] * float32[i];
       rms = Math.sqrt(rms / float32.length);
-      if (rms < 0) return;
+
+      // Processing detection: user was speaking → went silent → show "processing"
+      if (rms >= SPEECH_RMS_THRESHOLD) {
+        userWasSpeaking = true;
+        if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
+      } else if (userWasSpeaking && !processingTimer) {
+        processingTimer = setTimeout(() => {
+          processingTimer = null;
+          userWasSpeaking = false;
+          if (voiceConnected && onVoiceStatusCb) onVoiceStatusCb('processing');
+        }, PROCESSING_DELAY_MS);
+      }
+
       // User is speaking — reset silence timer
-      lastSpeechTime = Date.now();
+      if (rms >= SPEECH_RMS_THRESHOLD) lastSpeechTime = Date.now();
       // Convert float32 [-1,1] to int16 PCM
       const int16 = new Int16Array(float32.length);
       for (let i = 0; i < float32.length; i++) {
@@ -136,6 +153,8 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
       if (msg.type === 'audio') {
         playPCMAudio(msg.data);
         lastSpeechTime = Date.now();  // AI speaking = conversation active
+        userWasSpeaking = false;
+        if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
         if (onVoiceStatusCb) onVoiceStatusCb('speaking');
       } else if (msg.type === 'transcript') {
         // Forward both agent and user transcripts (user serves as fallback if local STT fails)
@@ -170,6 +189,9 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
 export function stopVoice() {
   voiceConnected = false;
   stopLocalTranscription();
+
+  if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
+  userWasSpeaking = false;
 
   if (silenceTimer) {
     clearInterval(silenceTimer);
