@@ -62,12 +62,12 @@ def build_multimodal_message(message: dict) -> types.Content:
     if gps:
         lat, lng = gps.get("lat"), gps.get("lng")
         parts.append(types.Part.from_text(
-            text=f"Tourist GPS: lat={lat}, lng={lng} (Brooklyn, NYC). "
+            text=f"User GPS: lat={lat}, lng={lng}. "
                  f"Find what's interesting nearby and guide them."
         ))
     else:
         parts.append(types.Part.from_text(
-            text="The tourist is in Brooklyn. No GPS provided yet."
+            text="No GPS provided yet."
         ))
 
     return types.Content(role="user", parts=parts)
@@ -151,7 +151,7 @@ async def analyze(websocket: WebSocket):
                 else:
                     # No POIs found — ask agent to greet the tourist
                     fallback_prompt = (
-                        f"A tourist just arrived in Brooklyn at lat={lat}, lng={lng}. "
+                        f"A user just arrived at lat={lat}, lng={lng}. "
                         f"Welcome them and ask what they'd like to explore."
                     )
                     spoken = await _run_agent(runner, session_id, types.Content(
