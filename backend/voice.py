@@ -13,43 +13,24 @@ from agent.tools.poi import get_nearby_pois
 from agent.tools.vision import analyze_frame
 from agent.tools.maps import get_distance, get_transit_directions, build_maps_url
 
-VOICE_SYSTEM_PROMPT = """You are WAYPOINT, an intelligent city exploration companion having a real-time voice conversation.
-The user is exploring their city right now and you're their guide.
+VOICE_SYSTEM_PROMPT = """You are WAYPOINT, a friendly city exploration companion. You're having a real-time voice conversation.
 
-PERSONALITY:
-- Warm, curious, and enthusiastic — like a well-traveled friend showing someone around
-- Keep responses SHORT — 1-3 sentences max. This is spoken audio, not text.
-- Never say "As an AI" — just talk naturally.
-- Ask follow-up questions to keep the conversation going.
+Be conversational. Just talk naturally. Do NOT call tools unless the user explicitly asks you to find, look up, or navigate somewhere.
 
-CORE BEHAVIOR:
-1. AGENT-CENTRIC EXPLORATION — your key responsibility.
-   The "Nearby" page in the app is empty until YOU fill it.
-   When the user wants to explore, find something specific, or just "see what's around":
-   - Use `get_nearby_pois` to find actual locations.
-   - Once you call this tool, the places will appear on the user's "Nearby" screen.
-   - Pick 2-3 of the most relevant ones and tell the user about them conversationally.
-   - Explain WHY they fit the user's vibe or request.
+RULES:
+- Keep responses SHORT — 1-2 sentences. This is spoken audio.
+- Be warm and enthusiastic, like a friend showing someone around.
+- Never say "As an AI". Just talk.
+- Chat freely. Ask follow-up questions. React to what they say.
 
-2. INTELLIGENT RECOMMENDATIONS:
-   When the user gives vague preferences ("something exotic", "a chill spot", "surprise me"):
-   - Figure out what kind of experience they want.
-   - Use `google_search` to find matching experiences or categories.
-   - Use `get_nearby_pois` to find the actual places in their current area.
-   - Tell them what you found and why it's a great match.
+ONLY use tools when the user asks you to:
+- "What's nearby?" / "Find me something" → call get_nearby_pois (results appear on their Nearby screen)
+- "What is that?" / "What am I looking at?" → call analyze_frame
+- "How far is X?" → call get_distance
+- "How do I get there?" / "Take me there" → call get_transit_directions or build_maps_url
+- For vague requests ("something exotic"), ask one quick clarifying question, then use get_nearby_pois
 
-3. VISUAL CONTEXT:
-   When the user asks "what is that?" or "what am I looking at?":
-   - Call `analyze_frame` if a camera frame is available.
-   - Tell them about the landmark or object, and how to get there if they're interested.
-
-4. NAVIGATION & TRANSIT:
-   - Call `get_distance` for walking times.
-   - Call `get_transit_directions` for subway/bus routes if the place is far (>15 min walk).
-   - Call `build_maps_url` only when the user is ready to go to a specific destination.
-
-NO GPS: If no GPS was provided, ask where they are before using location tools.
-TOO VAGUE: If the request is too vague, ask one clarifying question.
+If no GPS is available, ask where they are before using location tools.
 """
 
 # Tool registry for Live API tool calls
@@ -66,12 +47,12 @@ TOOL_DECLARATIONS = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
             name="get_nearby_pois",
-            description="Find Points of Interest near the tourist's GPS location in Brooklyn",
+            description="Find Points of Interest near the user's GPS location",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
-                    "lat": types.Schema(type="NUMBER", description="Tourist's current latitude"),
-                    "lng": types.Schema(type="NUMBER", description="Tourist's current longitude"),
+                    "lat": types.Schema(type="NUMBER", description="User's current latitude"),
+                    "lng": types.Schema(type="NUMBER", description="User's current longitude"),
                     "radius_meters": types.Schema(
                         type="INTEGER",
                         description="Search radius in meters (default 500)",
@@ -82,13 +63,13 @@ TOOL_DECLARATIONS = [
         ),
         types.FunctionDeclaration(
             name="analyze_frame",
-            description="Analyze a camera frame to identify landmarks, objects, and text visible to the tourist",
+            description="Analyze a camera frame to identify landmarks, objects, and text visible to the user",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
                     "image_b64": types.Schema(
                         type="STRING",
-                        description="Base64-encoded JPEG image from the tourist's camera",
+                        description="Base64-encoded JPEG image from the user's camera",
                     ),
                 },
                 required=["image_b64"],
@@ -96,12 +77,12 @@ TOOL_DECLARATIONS = [
         ),
         types.FunctionDeclaration(
             name="get_distance",
-            description="Get walking distance and time from the tourist to a destination",
+            description="Get walking distance and time from the user to a destination",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
-                    "origin_lat": types.Schema(type="NUMBER", description="Tourist's current latitude"),
-                    "origin_lng": types.Schema(type="NUMBER", description="Tourist's current longitude"),
+                    "origin_lat": types.Schema(type="NUMBER", description="User's current latitude"),
+                    "origin_lng": types.Schema(type="NUMBER", description="User's current longitude"),
                     "dest_lat": types.Schema(type="NUMBER", description="Destination latitude"),
                     "dest_lng": types.Schema(type="NUMBER", description="Destination longitude"),
                 },
@@ -136,8 +117,6 @@ TOOL_DECLARATIONS = [
             ),
         ),
     ]),
-    # Google Search grounding — lets the agent search for place details, recommendations, etc.
-    types.Tool(google_search=types.GoogleSearch()),
 ]
 
 

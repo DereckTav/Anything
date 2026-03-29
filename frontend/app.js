@@ -137,12 +137,26 @@ function triggerDiscovery() {
 // ── State transitions ──────────────────────────────────────────
 
 async function transitionTo(newState, payload = null) {
-  await cleanup(currentState);
+  const prevState = currentState;
   currentState = newState;
 
   switch (newState) {
-    case State.IDLE:       showScreen('screen-idle'); resetSession(); break;
-    case State.EXPLORING:  await enterExploring(); break;
+    case State.IDLE:
+      await cleanup(prevState);
+      showScreen('screen-idle');
+      resetSession();
+      break;
+    case State.EXPLORING:
+      // If coming back from NEARBY/DETAIL, just show the explore screen (voice still running)
+      if (prevState === State.NEARBY || prevState === State.DETAIL) {
+        document.getElementById('screen-nearby')?.classList.add('hidden');
+        document.getElementById('screen-detail')?.classList.add('hidden');
+        showScreen('screen-exploring');
+      } else {
+        await cleanup(prevState);
+        await enterExploring();
+      }
+      break;
     case State.NEARBY:     await enterNearby(); break;
     case State.DETAIL:     await enterDetail(payload); break;
   }
@@ -155,7 +169,6 @@ async function cleanup(state) {
       stopVoiceMode();
       hideSubtitle();
       stopSpeaking();
-      
       break;
     case State.NEARBY:
     case State.DETAIL:

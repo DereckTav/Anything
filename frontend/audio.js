@@ -88,7 +88,7 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
       let rms = 0;
       for (let i = 0; i < float32.length; i++) rms += float32[i] * float32[i];
       rms = Math.sqrt(rms / float32.length);
-      if (rms < 0.005) return;
+      if (rms < 0) return;
       // User is speaking — reset silence timer
       lastSpeechTime = Date.now();
       // Convert float32 [-1,1] to int16 PCM
@@ -115,7 +115,8 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
       if (onVoiceStatusCb) onVoiceStatusCb('listening');
       console.log('[Voice] Connected');
 
-      startLocalTranscription();
+      // Local STT disabled — Gemini handles transcription server-side
+      // This avoids dual-mic conflicts on Android that cause mic toggling/delays
 
       // Start silence detection timer
       if (silenceTimer) clearInterval(silenceTimer);
@@ -137,8 +138,8 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, 
         lastSpeechTime = Date.now();  // AI speaking = conversation active
         if (onVoiceStatusCb) onVoiceStatusCb('speaking');
       } else if (msg.type === 'transcript') {
-        // Only show agent transcripts from server; user uses local recognition
-        if (msg.role === 'agent' && onTranscriptCb) onTranscriptCb(msg);
+        // Forward both agent and user transcripts (user serves as fallback if local STT fails)
+        if (onTranscriptCb) onTranscriptCb(msg);
       } else if (msg.type === 'turn_complete') {
         if (onVoiceStatusCb) onVoiceStatusCb('listening');
       } else if (msg.type === 'poi_chips' || msg.type === 'maps_url') {
