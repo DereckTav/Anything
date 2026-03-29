@@ -60,13 +60,13 @@ _TYPE_MAP = {
 
 def get_nearby_pois(lat: float, lng: float, radius_meters: int = 500) -> dict:
     """
-    Get Points of Interest near a GPS location in Brooklyn.
-    Returns up to 20 nearby tourist-relevant places with names, types, and coordinates.
-    Use this whenever the tourist asks what is nearby, what to see, or where to go.
+    Get Points of Interest near a GPS location.
+    Returns up to 20 nearby places with names, types, and coordinates.
+    Use this whenever the user asks what is nearby, what to see, or where to go.
 
     Args:
-        lat: Latitude of the tourist's current location
-        lng: Longitude of the tourist's current location
+        lat: Latitude of the user's current location
+        lng: Longitude of the user's current location
         radius_meters: Search radius in meters (default 500 ≈ 6 min walk)
     """
     try:

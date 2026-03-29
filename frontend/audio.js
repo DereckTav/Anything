@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════
-// URBANLENS Audio — Real-time voice via Gemini Live API
+// WAYPOINT Audio — Real-time voice via Gemini Live API
 // ═══════════════════════════════════════════
 
 // ── State ──
@@ -26,6 +26,7 @@ let onSilenceTimeoutCb = null;
 // Callbacks
 let onTranscriptCb = null;    // called with text transcription of user/agent speech
 let onVoiceStatusCb = null;   // called with status updates ('listening', 'speaking', 'idle')
+let onToolDataCb = null;      // called with {type, ...data} for tool-related updates (poi_chips, maps_url)
 
 // Preload TTS voices for fallback
 if ('speechSynthesis' in window) {
@@ -49,11 +50,13 @@ if ('speechSynthesis' in window) {
  * @param {Function} onStatus - called with status string
  * @param {object} gps - {lat, lng} for tool context
  * @param {Function} onSilenceTimeout - called when user is silent for 5 seconds
+ * @param {Function} onToolData - called with {type, ...} for UI updates from tool calls
  */
-export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout) {
+export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout, onToolData) {
   onTranscriptCb = onTranscript;
   onVoiceStatusCb = onStatus;
   onSilenceTimeoutCb = onSilenceTimeout || null;
+  onToolDataCb = onToolData || null;
   lastSpeechTime = Date.now();
 
   // Build WebSocket URL for voice endpoint
@@ -138,6 +141,8 @@ export async function startVoice(onTranscript, onStatus, gps, onSilenceTimeout) 
         if (msg.role === 'agent' && onTranscriptCb) onTranscriptCb(msg);
       } else if (msg.type === 'turn_complete') {
         if (onVoiceStatusCb) onVoiceStatusCb('listening');
+      } else if (msg.type === 'poi_chips' || msg.type === 'maps_url') {
+        if (onToolDataCb) onToolDataCb(msg);
       } else if (msg.type === 'error') {
         console.error('[Voice] Error:', msg.message);
         if (onTranscriptCb) onTranscriptCb({ role: 'system', text: msg.message });
@@ -358,9 +363,6 @@ export function stopSpeaking() {
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
-// Keep old exports for compatibility
-export function startListening() { return false; }
-export function stopListening() {}
 
 export function toggleMute() {
   muted = !muted;

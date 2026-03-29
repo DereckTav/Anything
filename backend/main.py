@@ -5,7 +5,6 @@ import re
 
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from google.adk.runners import Runner
@@ -13,7 +12,6 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from agent.agent import root_agent
-from agent.prompts import DISCOVER_PROMPT_TEMPLATE
 from agent.tools.poi import get_nearby_pois
 from agent.tools.maps import get_distance, build_maps_url
 from config import GPS_REQUIRED, POI_CHIPS_MAX

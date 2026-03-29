@@ -77,6 +77,75 @@ def get_distance(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng
     }
 
 
+def get_transit_directions(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> dict:
+    """
+    Get public transit directions (subway, bus) between two points.
+    Use this when the user wants to take transit to a destination, especially for longer distances.
+    Returns step-by-step directions including which lines to take and where to transfer.
+
+    Args:
+        origin_lat: User's current latitude
+        origin_lng: User's current longitude
+        dest_lat: Destination latitude
+        dest_lng: Destination longitude
+    """
+    if not GOOGLE_API_KEY:
+        return {"error": "Google API key not configured", "steps": []}
+
+    try:
+        url = "https://maps.googleapis.com/maps/api/directions/json"
+        params = {
+            "origin": f"{origin_lat},{origin_lng}",
+            "destination": f"{dest_lat},{dest_lng}",
+            "mode": "transit",
+            "key": GOOGLE_API_KEY,
+        }
+        with httpx.Client(timeout=TOOL_TIMEOUT_S + 2) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+        if data.get("status") != "OK":
+            return {"error": f"No transit routes found ({data.get('status')})", "steps": []}
+
+        route = data["routes"][0]
+        leg = route["legs"][0]
+
+        steps = []
+        for step in leg["steps"]:
+            s = {
+                "instruction": step.get("html_instructions", "").replace("<b>", "").replace("</b>", ""),
+                "distance": step["distance"]["text"],
+                "duration": step["duration"]["text"],
+                "travel_mode": step["travel_mode"].lower(),
+            }
+            td = step.get("transit_details")
+            if td:
+                line = td.get("line", {})
+                s["transit"] = {
+                    "line_name": line.get("short_name") or line.get("name", ""),
+                    "vehicle_type": line.get("vehicle", {}).get("type", "").lower(),
+                    "departure_stop": td.get("departure_stop", {}).get("name", ""),
+                    "arrival_stop": td.get("arrival_stop", {}).get("name", ""),
+                    "num_stops": td.get("num_stops", 0),
+                    "color": line.get("color", ""),
+                }
+            steps.append(s)
+
+        return {
+            "total_duration": leg["duration"]["text"],
+            "total_distance": leg["distance"]["text"],
+            "departure_time": leg.get("departure_time", {}).get("text", ""),
+            "arrival_time": leg.get("arrival_time", {}).get("text", ""),
+            "steps": steps,
+        }
+
+    except httpx.TimeoutException:
+        return {"error": "Transit directions request timed out", "steps": []}
+    except Exception as e:
+        return {"error": str(e), "steps": []}
+
+
 def build_maps_url(dest_name: str, dest_lat: float, dest_lng: float) -> dict:
     """
     Build a Google Maps deep-link URL so the tourist can navigate to a destination.

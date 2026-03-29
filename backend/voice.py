@@ -11,30 +11,45 @@ from google.genai import types
 from config import GOOGLE_API_KEY
 from agent.tools.poi import get_nearby_pois
 from agent.tools.vision import analyze_frame
-from agent.tools.maps import get_distance, build_maps_url
+from agent.tools.maps import get_distance, get_transit_directions, build_maps_url
 
-VOICE_SYSTEM_PROMPT = """You are WAYPOINT, a friendly local guide helping first-time tourists explore Brooklyn, NYC.
-You are having a real-time voice conversation. The tourist is walking around Brooklyn right now.
+VOICE_SYSTEM_PROMPT = """You are WAYPOINT, an intelligent city exploration companion having a real-time voice conversation.
+The user is exploring their city right now and you're their guide.
 
-RULES:
-1. Be warm, conversational, and enthusiastic. Sound like a friend who knows Brooklyn well.
-2. Keep responses SHORT — 1-3 sentences max. This is spoken audio, not text.
-3. You have tools to find nearby places, identify what the camera sees, get walking directions,
-   and search the web. Use tools when the tourist asks something specific.
-   - Nearby places / what to see → get_nearby_pois
-   - What is this building? → analyze_frame
-   - How far is it? → get_distance
-   - Take me there → build_maps_url
-4. When you mention specific places, give a one-sentence reason why they're worth visiting.
-5. Never say "As an AI" — just talk naturally.
-6. When the tourist seems done with a topic, ask a follow-up question to keep exploring.
+PERSONALITY:
+- Warm, curious, and enthusiastic — like a well-traveled friend showing someone around
+- Keep responses SHORT — 1-3 sentences max. This is spoken audio, not text.
+- Never say "As an AI" — just talk naturally.
+- Ask follow-up questions to keep the conversation going.
 
-TOOL USAGE:
-- get_nearby_pois: when tourist asks what's nearby or what to see
-- analyze_frame: when tourist asks what something is or you want visual context
-- get_distance: when tourist asks how far something is
-- build_maps_url: when tourist wants directions to a specific place
-- For hours, prices, or reviews: answer from your own knowledge about Brooklyn
+CORE BEHAVIOR:
+1. AGENT-CENTRIC EXPLORATION — your key responsibility.
+   The "Nearby" page in the app is empty until YOU fill it.
+   When the user wants to explore, find something specific, or just "see what's around":
+   - Use `get_nearby_pois` to find actual locations.
+   - Once you call this tool, the places will appear on the user's "Nearby" screen.
+   - Pick 2-3 of the most relevant ones and tell the user about them conversationally.
+   - Explain WHY they fit the user's vibe or request.
+
+2. INTELLIGENT RECOMMENDATIONS:
+   When the user gives vague preferences ("something exotic", "a chill spot", "surprise me"):
+   - Figure out what kind of experience they want.
+   - Use `google_search` to find matching experiences or categories.
+   - Use `get_nearby_pois` to find the actual places in their current area.
+   - Tell them what you found and why it's a great match.
+
+3. VISUAL CONTEXT:
+   When the user asks "what is that?" or "what am I looking at?":
+   - Call `analyze_frame` if a camera frame is available.
+   - Tell them about the landmark or object, and how to get there if they're interested.
+
+4. NAVIGATION & TRANSIT:
+   - Call `get_distance` for walking times.
+   - Call `get_transit_directions` for subway/bus routes if the place is far (>15 min walk).
+   - Call `build_maps_url` only when the user is ready to go to a specific destination.
+
+NO GPS: If no GPS was provided, ask where they are before using location tools.
+TOO VAGUE: If the request is too vague, ask one clarifying question.
 """
 
 # Tool registry for Live API tool calls
@@ -42,6 +57,7 @@ TOOL_FUNCTIONS = {
     "get_nearby_pois": get_nearby_pois,
     "analyze_frame": analyze_frame,
     "get_distance": get_distance,
+    "get_transit_directions": get_transit_directions,
     "build_maps_url": build_maps_url,
 }
 
@@ -93,8 +109,22 @@ TOOL_DECLARATIONS = [
             ),
         ),
         types.FunctionDeclaration(
+            name="get_transit_directions",
+            description="Get public transit directions (subway, bus) between two points with step-by-step route",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "origin_lat": types.Schema(type="NUMBER", description="User's current latitude"),
+                    "origin_lng": types.Schema(type="NUMBER", description="User's current longitude"),
+                    "dest_lat": types.Schema(type="NUMBER", description="Destination latitude"),
+                    "dest_lng": types.Schema(type="NUMBER", description="Destination longitude"),
+                },
+                required=["origin_lat", "origin_lng", "dest_lat", "dest_lng"],
+            ),
+        ),
+        types.FunctionDeclaration(
             name="build_maps_url",
-            description="Build a Google Maps navigation link so the tourist can walk to a destination",
+            description="Build a Google Maps navigation link so the user can navigate to a destination",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={
@@ -105,7 +135,9 @@ TOOL_DECLARATIONS = [
                 required=["dest_name", "dest_lat", "dest_lng"],
             ),
         ),
-    ])
+    ]),
+    # Google Search grounding — lets the agent search for place details, recommendations, etc.
+    types.Tool(google_search=types.GoogleSearch()),
 ]
 
 
@@ -199,8 +231,16 @@ async def handle_voice(websocket: WebSocket):
                                         )
                                     )
 
-                                    # If build_maps_url was called, forward the URL to the client
-                                    # so the frontend can show a "Take me there" button
+                                    # UPDATE FRONTEND BASED ON TOOL RESULTS
+
+                                    # 1. Populate nearby list
+                                    if fc.name == "get_nearby_pois" and "pois" in result:
+                                        await websocket.send_json({
+                                            "type": "poi_chips",
+                                            "pois": result["pois"],
+                                        })
+
+                                    # 2. Forward maps URL for "Take me there" button
                                     if fc.name == "build_maps_url" and "maps_url" in result:
                                         await websocket.send_json({
                                             "type": "maps_url",

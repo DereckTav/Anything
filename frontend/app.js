@@ -69,11 +69,12 @@ function showScreen(id) {
   requestAnimationFrame(() => { target.style.opacity = '1'; });
 }
 
-// ── WebSocket message handler ──────────────────────────────────
+// ── WebSocket message handler (Text Agent) ─────────────────────
 
 function handleWSMessage(data) {
   switch (data.type) {
     case 'narration':
+      hideThinking();
       if (currentState === State.EXPLORING && !voiceActive) {
         speakNarration(data.text);
         showSubtitle(data.text);
@@ -81,6 +82,7 @@ function handleWSMessage(data) {
       break;
 
     case 'poi_chips':
+      hideThinking();
       if (data.pois?.length) {
         currentPOIs = data.pois;
         if (currentState === State.EXPLORING) {
@@ -90,10 +92,12 @@ function handleWSMessage(data) {
       break;
 
     case 'gps_required':
+      hideThinking();
       showGPSOverlay();
       break;
 
     case 'error':
+      hideThinking();
       console.error('[WS] Backend error:', data.message);
       break;
   }
@@ -133,9 +137,20 @@ function clearPOIChips() {
   if (container) container.innerHTML = '';
 }
 
+// ── Thinking indicator ─────────────────────────────────────────
+
+function showThinking() {
+  document.getElementById('thinking-indicator')?.classList.remove('hidden');
+}
+
+function hideThinking() {
+  document.getElementById('thinking-indicator')?.classList.add('hidden');
+}
+
 // ── Proactive discovery loop ───────────────────────────────────
 
 function startDiscoveryLoop() {
+  if (voiceActive) return; // Don't run loop if voice is active
   stopDiscoveryLoop();
   // Fire once immediately, then every 60s
   triggerDiscovery();
@@ -151,7 +166,8 @@ function stopDiscoveryLoop() {
 
 function triggerDiscovery() {
   const gps = getGPS();
-  if (!gps || currentState !== State.EXPLORING) return;
+  if (!gps || currentState !== State.EXPLORING || voiceActive) return;
+  showThinking();
   sendMessage({ type: 'discover', gps: { lat: gps.lat, lng: gps.lng } });
 }
 
@@ -220,13 +236,16 @@ async function enterExploring() {
   connectWebSocket(handleWSMessage, () => {}, () => {});
   await waitForGPS(3000);
   
-  startDiscoveryLoop();
-
   // Voice button
   document.getElementById('btn-voice')?.addEventListener('click', toggleVoiceMode);
 
   // Auto-start voice
-  toggleVoiceMode();
+  await toggleVoiceMode();
+
+  // If voice didn't start or was toggled off, start the discovery loop
+  if (!voiceActive) {
+    startDiscoveryLoop();
+  }
 
   // Nearby button
   document.getElementById('btn-nearby')?.addEventListener('click', () => {
@@ -252,16 +271,21 @@ async function toggleVoiceMode() {
 
   if (!voiceActive) {
     stopSpeaking();
+    stopDiscoveryLoop(); // Stop text agent discovery when voice is active
     const gps = getGPS();
 
     const started = await startVoice(
       (msg) => {
-        if (msg.role === 'agent' || msg.role === 'user') {
+        if (msg.role === 'agent') {
+          hideThinking();
           const text = msg.text || '';
           const display = text.length > 120 ? '...' + text.slice(-120) : text;
           showSubtitle(display);
-        } else if (msg.role === 'thinking') {
-          showSubtitle('<i>Thinking...</i>');
+        } else if (msg.role === 'user') {
+          showThinking();
+          const text = msg.text || '';
+          const display = text.length > 120 ? '...' + text.slice(-120) : text;
+          showSubtitle(display);
         }
       },
       (status) => {
@@ -270,12 +294,27 @@ async function toggleVoiceMode() {
         if (statusLabel) statusLabel.textContent = labels[status] || 'Voice';
         if (status === 'listening') {
           if (label) label.textContent = 'LISTENING';
-          showSubtitle('...');
         } else if (status === 'speaking') {
+          hideThinking();
           if (label) label.textContent = 'SPEAKING';
         }
       },
-      gps
+      gps,
+      null, // onSilenceTimeout
+      (toolData) => {
+        // Handle POI updates from voice agent tools
+        if (toolData.type === 'poi_chips') {
+          if (toolData.pois?.length) {
+            currentPOIs = toolData.pois;
+            if (currentState === State.EXPLORING) {
+              renderPOIChips(toolData.pois);
+            }
+          }
+        } else if (toolData.type === 'maps_url') {
+           // We could show a specific "Navigate" prompt here
+           console.log('[Voice] Destination ready:', toolData.maps_url);
+        }
+      }
     );
 
     if (started) {
@@ -291,15 +330,19 @@ async function toggleVoiceMode() {
       //   const frame = captureFrame();
       //   if (frame) sendVoiceFrame(frame);
       // }, 8000);
+    } else {
+      startDiscoveryLoop(); // Fallback if voice fails
     }
 
   } else {
     stopVoiceMode();
+    startDiscoveryLoop(); // Resume text agent discovery when voice is off
     if (icon)  icon.textContent = 'mic';
     if (label) label.textContent = 'VOICE';
     btn?.classList.remove('text-primary', 'scale-110');
     btn?.classList.add('text-white/60');
     hideSubtitle();
+    hideThinking();
   }
 }
 
